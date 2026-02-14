@@ -1,0 +1,241 @@
+"""
+Remote command protocol for communicating with KTV daemon
+"""
+
+import json
+import socket
+import logging
+import base64
+from typing import Dict, Any, Tuple
+
+logger = logging.getLogger(__name__)
+
+
+class CommandClient:
+    """Client for sending commands to KTV daemon API"""
+    
+    def __init__(self, ssh_client):
+        """
+        Initialize command client
+        
+        Args:
+            ssh_client: Connected SSH client instance
+        """
+        self.ssh_client = ssh_client
+        self.daemon_port = 8888
+    
+    def send_command(self, command: str, params: Dict[str, Any] = None) -> Tuple[bool, Any, str]:
+        """
+        Send a command to the daemon
+        
+        Args:
+            command: Command name
+            params: Command parameters
+            
+        Returns:
+            Tuple of (success, result, error_message)
+        """
+        if not self.ssh_client.is_connected():
+            return False, None, "SSH not connected"
+        
+        if params is None:
+            params = {}
+        
+        try:
+            # Create command JSON
+            request = {
+                'command': command,
+                'params': params
+            }
+            request_json = json.dumps(request)
+            
+            logger.debug(f"Sending command: {command}")
+            
+            # Encode JSON to base64 to avoid shell escaping issues
+            request_b64 = base64.b64encode(request_json.encode('utf-8')).decode('ascii')
+            
+            # Python script that decodes base64 and sends to daemon
+            python_cmd = f'''python3 -c "
+import socket
+import json
+import sys
+import base64
+
+try:
+    # Decode base64 request
+    request_json = base64.b64decode('{request_b64}').decode('utf-8')
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(10)
+    sock.connect(('localhost', {self.daemon_port}))
+    
+    sock.sendall(request_json.encode('utf-8'))
+    
+    # Receive response
+    data = b''
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        try:
+            json.loads(data.decode('utf-8'))
+            break
+        except:
+            continue
+    
+    sock.close()
+    print(data.decode('utf-8'))
+    sys.exit(0)
+except Exception as e:
+    print(json.dumps({{'success': False, 'error': str(e)}}))
+    sys.exit(1)
+"
+'''
+            
+            # Execute via SSH
+            exit_code, stdout, stderr = self.ssh_client.execute_command(python_cmd)
+            
+            if exit_code != 0 and not stdout:
+                return False, None, f"Command failed: {stderr}"
+            
+            # Parse response
+            try:
+                response = json.loads(stdout.strip())
+                
+                if response.get('success'):
+                    return True, response.get('result'), ""
+                else:
+                    error = response.get('error', 'Unknown error')
+                    return False, None, error
+                    
+            except json.JSONDecodeError as e:
+                return False, None, f"Invalid response: {str(e)}"
+            
+        except Exception as e:
+            error = f"Command execution failed: {str(e)}"
+            logger.error(error)
+            return False, None, error
+    
+    # Convenience methods for specific commands
+    
+    def add_schedule(self, month: int, day: int, hour: int, minute: int,
+                    filepath: str, filename: str, category: str = 'movies') -> Tuple[bool, int, str]:
+        """Add a schedule entry"""
+        params = {
+            'month': month,
+            'day': day,
+            'hour': hour,
+            'minute': minute,
+            'filepath': filepath,
+            'filename': filename,
+            'category': category
+        }
+        success, result, error = self.send_command('add_schedule', params)
+        schedule_id = result.get('schedule_id', 0) if result else 0
+        return success, schedule_id, error
+    
+    def remove_schedule(self, schedule_id: int) -> Tuple[bool, str]:
+        """Remove a schedule entry"""
+        success, result, error = self.send_command('remove_schedule', {'schedule_id': schedule_id})
+        return success, error
+    
+    def toggle_schedule(self, schedule_id: int, enabled: bool) -> Tuple[bool, str]:
+        """Toggle schedule enabled status"""
+        params = {
+            'schedule_id': schedule_id,
+            'enabled': enabled
+        }
+        success, result, error = self.send_command('toggle_schedule', params)
+        return success, error
+    
+    def list_schedules(self, enabled_only: bool = False, category: str = None) -> Tuple[bool, list, str]:
+        """List all schedules"""
+        params = {}
+        if enabled_only:
+            params['enabled_only'] = True
+        if category:
+            params['category'] = category
+        
+        success, result, error = self.send_command('list_schedules', params)
+        schedules = result.get('schedules', []) if result else []
+        return success, schedules, error
+    
+    def create_playlist(self, name: str, folder_path: str) -> Tuple[bool, int, str]:
+        """Create a new playlist"""
+        params = {
+            'name': name,
+            'folder_path': folder_path
+        }
+        success, result, error = self.send_command('create_playlist', params)
+        playlist_id = result.get('playlist_id', 0) if result else 0
+        return success, playlist_id, error
+    
+    def delete_playlist(self, playlist_id: int) -> Tuple[bool, str]:
+        """Delete a playlist"""
+        success, result, error = self.send_command('delete_playlist', {'playlist_id': playlist_id})
+        return success, error
+    
+    def set_active_playlist(self, playlist_id: int) -> Tuple[bool, str]:
+        """Set active playlist"""
+        success, result, error = self.send_command('set_active_playlist', {'playlist_id': playlist_id})
+        return success, error
+    
+    def list_playlists(self) -> Tuple[bool, list, str]:
+        """List all playlists"""
+        success, result, error = self.send_command('list_playlists')
+        playlists = result.get('playlists', []) if result else []
+        return success, playlists, error
+    
+    def get_status(self) -> Tuple[bool, Dict, str]:
+        """Get daemon status"""
+        success, result, error = self.send_command('get_status')
+        return success, result or {}, error
+    
+    def ping(self) -> Tuple[bool, str]:
+        """Ping the daemon"""
+        success, result, error = self.send_command('ping')
+        return success, error
+
+
+# Test functionality
+if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    import sys
+    sys.path.append('..')
+    from network.ssh_client import SSHClient
+    
+    # Test with your own credentials
+    ssh = SSHClient()
+    success, error = ssh.connect(
+        host='192.168.1.100',
+        username='user',
+        password='password'
+    )
+    
+    if success:
+        print("SSH connected!")
+        
+        cmd_client = CommandClient(ssh)
+        
+        # Test ping
+        success, error = cmd_client.ping()
+        if success:
+            print("Ping successful!")
+        else:
+            print(f"Ping failed: {error}")
+        
+        # Test status
+        success, status, error = cmd_client.get_status()
+        if success:
+            print(f"Status: {status}")
+        else:
+            print(f"Status failed: {error}")
+        
+        ssh.disconnect()
+    else:
+        print(f"SSH connection failed: {error}")

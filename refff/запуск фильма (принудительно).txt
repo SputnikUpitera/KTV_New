@@ -1,0 +1,2 @@
+vlc -f ~/dr/gr.mp4
+export DISPLAY=:0

@@ -1,0 +1,91 @@
+1.1)uname -a:
+Linux films 5.4.0-216-generic #236-Ubuntu SMP Fri Apr 11 19:53:21 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+1.2)lsb_release -a:
+Linux films 5.4.0-216-generic #236-Ubuntu SMP Fri Apr 11 19:53:21 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+user@films:~$ ^C
+user@films:~$ lsb_release -a
+No LSB modules are available.
+Distributor ID: Ubuntu
+Description:    Ubuntu 20.04.5 LTS
+Release:        20.04
+Codename:       focal
+1.3)cat /etc/os-release:
+NAME="Ubuntu"
+VERSION="20.04.5 LTS (Focal Fossa)"
+ID=ubuntu
+ID_LIKE=debian
+PRETTY_NAME="Ubuntu 20.04.5 LTS"
+VERSION_ID="20.04"
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+VERSION_CODENAME=focal
+UBUNTU_CODENAME=focal
+2.1)lscpu:
+Architecture:                       x86_64
+CPU op-mode(s):                     32-bit, 64-bit
+Byte Order:                         Little Endian
+Address sizes:                      36 bits physical, 48 bits virtual
+CPU(s):                             4
+On-line CPU(s) list:                0-3
+Thread(s) per core:                 2
+Core(s) per socket:                 2
+Socket(s):                          1
+NUMA node(s):                       1
+Vendor ID:                          GenuineIntel
+CPU family:                         6
+Model:                              28
+Model name:                         Intel(R) Atom(TM) CPU D525   @ 1.80GHz
+Stepping:                           10
+CPU MHz:                            1795.871
+BogoMIPS:                           3590.92
+L1d cache:                          48 KiB
+L1i cache:                          64 KiB
+L2 cache:                           1 MiB
+NUMA node0 CPU(s):                  0-3
+Vulnerability Gather data sampling: Not affected
+Vulnerability Itlb multihit:        Not affected
+Vulnerability L1tf:                 Not affected
+Vulnerability Mds:                  Not affected
+Vulnerability Meltdown:             Not affected
+Vulnerability Mmio stale data:      Not affected
+Vulnerability Retbleed:             Not affected
+Vulnerability Spec store bypass:    Not affected
+Vulnerability Spectre v1:           Not affected
+Vulnerability Spectre v2:           Not affected
+Vulnerability Srbds:                Not affected
+Vulnerability Tsx async abort:      Not affected
+Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep
+                                    mtrr pge mca cmov pat pse36 clflush dts acpi
+                                     mmx fxsr sse sse2 ss ht tm pbe syscall nx l
+                                    m constant_tsc arch_perfmon pebs bts rep_goo
+                                    d nopl cpuid aperfmperf pni dtes64 monitor d
+                                    s_cpl tm2 ssse3 cx16 xtpr pdcm movbe lahf_lm
+                                     dtherm
+2.2)free -h:
+              total        used        free      shared  buff/cache   available
+Mem:          1.9Gi       564Mi        94Mi        15Mi       1.3Gi       1.2Gi
+Swap:            0B          0B          0B
+2.3)cat /proc/meminfo | head -20:
+MemTotal:        2008616 kB
+MemFree:           83712 kB
+MemAvailable:    1127784 kB
+Buffers:           17776 kB
+Cached:          1158132 kB
+SwapCached:            0 kB
+Active:           723560 kB
+Inactive:         906408 kB
+Active(anon):     483660 kB
+Inactive(anon):     8572 kB
+Active(file):     239900 kB
+Inactive(file):   897836 kB
+Unevictable:       24136 kB
+Mlocked:              68 kB
+SwapTotal:             0 kB
+SwapFree:              0 kB
+Dirty:                 0 kB
+Writeback:             0 kB
+AnonPages:        478548 kB
+Mapped:           191080 kB
+

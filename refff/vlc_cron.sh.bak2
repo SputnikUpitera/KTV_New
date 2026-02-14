@@ -1,0 +1,22 @@
+#!/bin/bash
+month=$(date '+%-m')
+day=$(date '+%-d')
+
+hour=$(date '+%-H')
+minutes=$(date '+%M')
+# echo $month/$day/$hour-$minutes
+
+
+
+if [ -d ./$month/$day/$hour-$minutes/ ]; then
+#if [ -d ./$month/$day/test/ ]; then
+#killall vlc && sleep 1
+killall vlc && sleep 1
+env DISPLAY=:0 vlc --one-instance --play-and-exit --no-playlist-enqueue ~/$month/$day/$hour-$minutes/
+#env DISPLAY=:0 vlc --one-instance --play-and-exit --no-playlist-enqueue ~/$month/$day/$hour-$minutes/ && \
+# env DISPLAY=:0 vlc --one-instance --no-playlist-enqueue -Z ~/clips/ &
+echo $month/$day/$hour-$minutes >> ~/vlc_cron.log
+#echo "directory exist"
+fi
+
+#vlc --playlist-enqueue --one-instance 
