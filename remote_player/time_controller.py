@@ -121,10 +121,7 @@ class TimeController:
         logger.info("Broadcast started")
     
     def _stop_broadcasting(self):
-        """Stop broadcasting (called at end_time)"""
-        if not self.broadcasting:
-            return
-        
+        """Stop broadcasting (called at end_time or on init if outside hours)"""
         logger.info("Stopping broadcast")
         self.broadcasting = False
         

@@ -193,6 +193,14 @@ class MoviesTab(QWidget):
             # Upload and schedule the file
             self.upload_and_schedule(file_path, month, day, hour, minute)
     
+    def _get_remote_home(self) -> str:
+        """Get the remote user's home directory"""
+        if self.ssh_client and self.ssh_client.is_connected():
+            exit_code, stdout, _ = self.ssh_client.execute_command("echo $HOME")
+            if exit_code == 0 and stdout.strip():
+                return stdout.strip()
+        return "/home/user"
+    
     def upload_and_schedule(self, local_path: str, month: int, day: int, hour: int, minute: int):
         """Upload file and add to schedule"""
         if not self.ssh_client or not self.cmd_client:
@@ -200,7 +208,9 @@ class MoviesTab(QWidget):
             return
         
         filename = Path(local_path).name
-        remote_path = f"/opt/ktv/media/movies/{filename}"
+        home_dir = self._get_remote_home()
+        folder = f"{month:02d}/{day:02d}/{hour:02d}-{minute:02d}"
+        remote_path = f"{home_dir}/{folder}/{filename}"
         
         # Progress dialog
         progress = QProgressDialog(f"Загрузка {filename}...", "Отмена", 0, 100, self)

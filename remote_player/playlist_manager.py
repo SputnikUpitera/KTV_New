@@ -23,19 +23,18 @@ class PlaylistManager:
     # Supported video formats
     VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.webm', '.mov', '.flv', '.wmv', '.m4v'}
     
-    def __init__(self, database, player, media_base_path: str = '/opt/ktv/media'):
+    def __init__(self, database, player, clips_path: str = '~/clips'):
         """
         Initialize playlist manager
         
         Args:
             database: Database instance
             player: Player instance
-            media_base_path: Base path for media files
+            clips_path: Path to clips folder
         """
         self.db = database
         self.player = player
-        self.media_base_path = Path(media_base_path)
-        self.clips_path = self.media_base_path / 'clips'
+        self.clips_path = Path(os.path.expanduser(clips_path))
         
         self.running = False
         self.paused = False

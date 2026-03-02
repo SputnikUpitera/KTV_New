@@ -41,7 +41,7 @@ class InstallationVerifier:
             'media_directories_exist': False,
             'config_exists': False,
             'api_port_responding': False,
-            'mpv_available': False,
+            'vlc_available': False,
             'all_checks_passed': False,
             'errors': []
         }
@@ -101,14 +101,14 @@ class InstallationVerifier:
                 results['errors'].append("Database file not found")
                 logger.warning("✗ Database not found")
             
-            # Check media directories
+            # Check media directories (home-based structure)
             logger.info("Checking media directories...")
-            exit_code, stdout, stderr = self.ssh.execute_command('test -d /opt/ktv/media/movies && test -d /opt/ktv/media/clips && echo "yes" || echo "no"')
+            exit_code, stdout, stderr = self.ssh.execute_command('test -d ~/clips && echo "yes" || echo "no"')
             if 'yes' in stdout:
                 results['media_directories_exist'] = True
                 logger.info("✓ Media directories exist")
             else:
-                results['errors'].append("Media directories not found")
+                results['errors'].append("Clips directory ~/clips not found")
                 logger.warning("✗ Media directories not found")
             
             # Check config file
@@ -121,15 +121,15 @@ class InstallationVerifier:
                 results['errors'].append("Configuration file not found")
                 logger.warning("✗ Configuration not found")
             
-            # Check MPV
-            logger.info("Checking MPV...")
-            exit_code, stdout, stderr = self.ssh.execute_command('which mpv')
+            # Check VLC
+            logger.info("Checking VLC...")
+            exit_code, stdout, stderr = self.ssh.execute_command('which vlc')
             if exit_code == 0:
-                results['mpv_available'] = True
-                logger.info("✓ MPV is available")
+                results['vlc_available'] = True
+                logger.info("✓ VLC is available")
             else:
-                results['errors'].append("MPV is not installed")
-                logger.error("✗ MPV not found")
+                results['errors'].append("VLC is not installed")
+                logger.error("✗ VLC not found")
             
             # Check API port (if service is running)
             if results['service_running']:
@@ -138,7 +138,7 @@ class InstallationVerifier:
                 
                 # Try to connect to API port
                 exit_code, stdout, stderr = self.ssh.execute_command(
-                    'timeout 5 bash -c "echo > /dev/tcp/localhost/9999" 2>&1 && echo "yes" || echo "no"'
+                    'timeout 5 bash -c "echo > /dev/tcp/localhost/8888" 2>&1 && echo "yes" || echo "no"'
                 )
                 if 'yes' in stdout:
                     results['api_port_responding'] = True
@@ -152,7 +152,7 @@ class InstallationVerifier:
                 results['daemon_files_present'],
                 results['systemd_service_exists'],
                 results['service_running'],
-                results['mpv_available']
+                results.get('vlc_available', False)
             ]
             results['all_checks_passed'] = all(critical_checks)
             
@@ -191,8 +191,8 @@ class InstallationVerifier:
             ("Database", results.get('database_exists')),
             ("Media Directories", results.get('media_directories_exist')),
             ("Configuration", results.get('config_exists')),
-            ("MPV Available", results.get('mpv_available')),
-            ("API Port", results.get('api_port_responding'))
+            ("VLC Available", results.get('vlc_available')),
+            ("API Port 8888", results.get('api_port_responding'))
         ]
         
         for name, passed in checks:

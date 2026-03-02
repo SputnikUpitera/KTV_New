@@ -29,6 +29,7 @@ ENV/
 
 # Build artifacts
 build_temp/
+download_cache/
 offline_package/ktv_offline_package.tar.gz
 offline_package/packages/*.deb
 offline_package/python_wheels/*.whl

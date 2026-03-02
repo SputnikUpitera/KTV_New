@@ -67,6 +67,7 @@ class PackageDeployer:
                 progress_callback("Creating temporary directory...", 5)
             
             logger.info("Creating remote temp directory...")
+            self.ssh.execute_command(f'rm -rf {self.remote_temp_dir}')
             exit_code, stdout, stderr = self.ssh.execute_command(f'mkdir -p {self.remote_temp_dir}')
             if exit_code != 0:
                 return False, f"Failed to create temp directory: {stderr}"

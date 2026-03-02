@@ -34,83 +34,140 @@ class OfflinePackageBuilder:
         self.arch = arch
         self.output_dir = Path(output_dir)
         self.build_dir = Path('build_temp')
+        self.cache_dir = Path('download_cache')
+        self.deb_cache = self.cache_dir / 'packages'
+        self.whl_cache = self.cache_dir / 'python_wheels'
         
     def setup_directories(self):
-        """Create necessary directories"""
+        """Create necessary directories (clean build_temp first)"""
         print("[1/7] Setting up directories...")
+        
+        # Always start with a fresh build directory
+        if self.build_dir.exists():
+            shutil.rmtree(self.build_dir)
+        
         dirs = [
             self.build_dir / 'packages',
             self.build_dir / 'python_wheels',
             self.build_dir / 'daemon',
             self.build_dir / 'systemd',
-            self.build_dir / 'config'
+            self.build_dir / 'config',
+            self.deb_cache,
+            self.whl_cache,
         ]
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
         print("✓ Directories created")
     
     def download_packages(self):
-        """Download .deb packages"""
+        """Download .deb packages (uses cache to avoid re-downloading)"""
         print(f"[2/7] Downloading packages for {self.arch}...")
-        print("Note: This requires internet. Run this script on a machine with internet access.")
         
         packages_dir = self.build_dir / 'packages'
         
-        # Create a manifest file with all required packages
         manifest = []
         if self.arch in PACKAGE_URLS:
             for url in PACKAGE_URLS[self.arch]['mpv'] + PACKAGE_URLS[self.arch].get('dependencies', []):
                 manifest.append(url)
         
-        # Write manifest for manual download if needed
         manifest_file = packages_dir / 'download_manifest.txt'
         with open(manifest_file, 'w') as f:
             f.write('\n'.join(manifest))
         
-        print(f"✓ Package manifest created at: {manifest_file}")
-        print("  You can download these manually and place them in the packages/ directory")
+        cached = 0
+        downloaded = 0
         
-        # Try to download using wget or curl if available
         for url in manifest:
             filename = os.path.basename(url)
-            output_path = packages_dir / filename
-            if output_path.exists():
-                print(f"  ✓ {filename} already exists")
+            cache_path = self.deb_cache / filename
+            build_path = packages_dir / filename
+            
+            # Check cache first
+            if cache_path.exists():
+                shutil.copy2(cache_path, build_path)
+                print(f"  ✓ {filename} (из кеша)")
+                cached += 1
                 continue
             
-            print(f"  Downloading {filename}...")
-            # Try wget first, then curl
+            # Download and cache
+            print(f"  Скачивание {filename}...")
             try:
-                subprocess.run(['wget', '-q', '-O', str(output_path), url], check=True)
-                print(f"  ✓ Downloaded {filename}")
-            except:
+                subprocess.run(['wget', '-q', '-O', str(cache_path), url], check=True)
+            except Exception:
                 try:
-                    subprocess.run(['curl', '-s', '-o', str(output_path), url], check=True)
-                    print(f"  ✓ Downloaded {filename}")
-                except:
-                    print(f"  ✗ Could not download {filename}. Please download manually from:")
-                    print(f"    {url}")
+                    subprocess.run(['curl', '-s', '-o', str(cache_path), url], check=True)
+                except Exception:
+                    print(f"  ✗ Не удалось скачать {filename}")
+                    continue
+            
+            shutil.copy2(cache_path, build_path)
+            print(f"  ✓ {filename} (скачано)")
+            downloaded += 1
         
+        print(f"✓ Пакеты готовы (из кеша: {cached}, скачано: {downloaded})")
+        
+    def _get_requirements_hash(self) -> str:
+        """Get a hash of requirements file to detect changes"""
+        import hashlib
+        req_path = Path('requirements_linux.txt')
+        if req_path.exists():
+            return hashlib.md5(req_path.read_bytes()).hexdigest()[:12]
+        return "unknown"
+    
     def download_python_wheels(self):
-        """Download Python wheel files"""
+        """Download Python wheel files (uses cache, invalidates on requirements change)"""
         print("[3/7] Downloading Python packages...")
         wheels_dir = self.build_dir / 'python_wheels'
         
+        # Check if cache is still valid (requirements haven't changed)
+        req_hash = self._get_requirements_hash()
+        hash_file = self.whl_cache / '.requirements_hash'
+        cache_valid = False
+        
+        cached_wheels = list(self.whl_cache.glob('*.whl'))
+        if cached_wheels and hash_file.exists():
+            saved_hash = hash_file.read_text().strip()
+            if saved_hash == req_hash:
+                cache_valid = True
+        
+        if cache_valid:
+            print(f"  Найдено {len(cached_wheels)} пакетов в кеше (актуален), пропуск скачивания")
+            for whl in cached_wheels:
+                shutil.copy2(whl, wheels_dir / whl.name)
+            print(f"✓ Python wheels скопированы из кеша")
+            return
+        
+        # Cache invalid or empty — clear and re-download
+        if cached_wheels:
+            print("  Кеш устарел (requirements изменились), перекачиваю...")
+            for old_whl in cached_wheels:
+                old_whl.unlink()
+        
         try:
-            # Download wheels for Linux
             subprocess.run([
                 sys.executable, '-m', 'pip', 'download',
                 '-r', 'requirements_linux.txt',
-                '-d', str(wheels_dir),
+                '-d', str(self.whl_cache),
                 '--platform', 'manylinux2014_x86_64',
+                '--platform', 'manylinux1_x86_64',
+                '--platform', 'linux_x86_64',
+                '--platform', 'any',
                 '--only-binary=:all:',
-                '--python-version', '38'
+                '--python-version', '38',
+                '--implementation', 'cp',
+                '--abi', 'cp38',
             ], check=True)
-            print("✓ Python wheels downloaded")
+            
+            # Save hash to mark cache as valid
+            hash_file.write_text(req_hash)
+            
+            # Copy from cache to build dir
+            for whl in self.whl_cache.glob('*.whl'):
+                shutil.copy2(whl, wheels_dir / whl.name)
+            
+            print("✓ Python wheels скачаны и закешированы")
         except subprocess.CalledProcessError as e:
-            print(f"✗ Failed to download Python wheels: {e}")
-            print("  Creating a minimal set...")
-            # Create a README for manual download
+            print(f"✗ Не удалось скачать Python wheels: {e}")
             with open(wheels_dir / 'README.txt', 'w') as f:
                 f.write("Download these Python packages and place .whl files here:\n")
                 with open('requirements_linux.txt') as req:
@@ -130,15 +187,18 @@ class OfflinePackageBuilder:
             (daemon_dst / 'placeholder.txt').write_text("Daemon files will be added here", encoding='utf-8')
     
     def create_systemd_service(self):
-        """Create systemd service file"""
-        print("[5/7] Creating systemd service...")
+        """Create systemd service file template.
+        The actual User= field will be filled in by install.sh at install time,
+        since we need the real SSH user (not the ktv system user) to resolve ~ correctly.
+        """
+        print("[5/7] Creating systemd service template...")
         service_content = """[Unit]
 Description=KTV Media Player Daemon
 After=network.target
 
 [Service]
 Type=simple
-User=ktv
+User=__DAEMON_USER__
 Group=ktv
 WorkingDirectory=/opt/ktv
 ExecStart=/usr/bin/python3 /opt/ktv/daemon.py
@@ -151,10 +211,9 @@ StandardError=append:/var/log/ktv/daemon.log
 WantedBy=multi-user.target
 """
         service_file = self.build_dir / 'systemd' / 'ktv-daemon.service'
-        # Use Unix line endings (LF) even on Windows
         with open(service_file, 'w', encoding='utf-8', newline='\n') as f:
             f.write(service_content)
-        print("✓ Systemd service created")
+        print("✓ Systemd service template created")
     
     def create_config(self):
         """Create default configuration"""
@@ -203,12 +262,7 @@ ARCH=$(uname -m)
 echo "Detected architecture: $ARCH"
 
 if [ "$ARCH" != "x86_64" ]; then
-    echo -e "${YELLOW}Warning: This package was built for x86_64${NC}"
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+    echo -e "${YELLOW}Warning: This package was built for x86_64, continuing anyway...${NC}"
 fi
 
 # Install .deb packages
@@ -218,7 +272,7 @@ if ls *.deb 1> /dev/null 2>&1; then
     dpkg -i *.deb 2>/dev/null || apt-get install -f -y
     echo "✓ System packages installed"
 else
-    echo -e "${YELLOW}Warning: No .deb packages found. MPV should be pre-installed.${NC}"
+    echo -e "${YELLOW}Warning: No .deb packages found. VLC should be pre-installed.${NC}"
 fi
 cd ..
 
@@ -231,14 +285,14 @@ fi
 PYTHON_VERSION=$(python3 --version)
 echo "✓ Found $PYTHON_VERSION"
 
-# Check if mpv is available
-echo -e "${GREEN}[3/8] Checking MPV...${NC}"
-if ! command -v mpv &> /dev/null; then
-    echo -e "${RED}Error: MPV is not installed${NC}"
+# Check if VLC is available
+echo -e "${GREEN}[3/8] Checking VLC...${NC}"
+if ! command -v vlc &> /dev/null; then
+    echo -e "${RED}Error: VLC is not installed${NC}"
     exit 1
 fi
-MPV_VERSION=$(mpv --version | head -1)
-echo "✓ Found $MPV_VERSION"
+VLC_VERSION=$(vlc --version 2>/dev/null | head -1)
+echo "✓ Found $VLC_VERSION"
 
 # Create KTV user and group
 echo -e "${GREEN}[4/8] Creating KTV user and group...${NC}"
@@ -259,26 +313,30 @@ fi
 # Create directories
 echo -e "${GREEN}[5/8] Creating directories...${NC}"
 mkdir -p /opt/ktv
-mkdir -p /opt/ktv/media/movies
-mkdir -p /opt/ktv/media/clips
 mkdir -p /var/lib/ktv
 mkdir -p /var/log/ktv
 mkdir -p /etc/ktv
 
-# Set ownership and permissions
-chown -R ktv:ktv /opt/ktv
-chown -R ktv:ktv /var/lib/ktv
-chown -R ktv:ktv /var/log/ktv
-chown -R ktv:ktv /etc/ktv
+# Create clips folder in user's home directory
+if [ "$ORIGINAL_USER" != "root" ]; then
+    USER_HOME=$(eval echo "~$ORIGINAL_USER")
+    mkdir -p "$USER_HOME/clips"
+    chown "$ORIGINAL_USER:ktv" "$USER_HOME/clips"
+    chmod 775 "$USER_HOME/clips"
+    echo "✓ Created clips directory: $USER_HOME/clips"
+fi
 
-# Make media directories writable by group
-chmod -R 775 /opt/ktv/media
+# Pre-create log file
+touch /var/log/ktv/daemon.log
+
+# Set ownership to the actual user, group ktv
+chown -R "$ORIGINAL_USER:ktv" /opt/ktv
+chown -R "$ORIGINAL_USER:ktv" /var/lib/ktv
+chown -R "$ORIGINAL_USER:ktv" /var/log/ktv
+chown -R "$ORIGINAL_USER:ktv" /etc/ktv
+
 chmod -R 775 /var/lib/ktv
 chmod -R 775 /var/log/ktv
-
-# Set setgid bit so new files inherit group ownership
-chmod g+s /opt/ktv/media/movies
-chmod g+s /opt/ktv/media/clips
 
 echo "✓ Directories created with proper permissions"
 
@@ -292,10 +350,12 @@ if ! command -v pip3 &> /dev/null; then
 fi
 
 # Install Python packages from wheels to system Python
-# Use --break-system-packages for newer Python versions (3.11+) with PEP 668
 if [ -d "python_wheels" ] && [ "$(ls -A python_wheels/*.whl 2>/dev/null)" ]; then
     if command -v pip3 &> /dev/null; then
-        pip3 install --break-system-packages --no-index --find-links=python_wheels python_wheels/*.whl
+        # Try with --break-system-packages first (needed for Python 3.11+/PEP 668)
+        # --force-reinstall ensures clean state on re-installation
+        pip3 install --force-reinstall --break-system-packages --no-index --find-links=python_wheels python_wheels/*.whl 2>/dev/null \
+            || pip3 install --force-reinstall --no-index --find-links=python_wheels python_wheels/*.whl
         echo "✓ Python packages installed"
     else
         echo -e "${RED}Error: pip3 not available${NC}"
@@ -305,37 +365,46 @@ else
     echo -e "${YELLOW}Warning: No Python wheels found${NC}"
 fi
 
-# Copy daemon files
+# Copy daemon files (clean old files first to avoid stale code)
 echo -e "${GREEN}[7/8] Installing daemon...${NC}"
 if [ -d "daemon" ]; then
+    # Remove old daemon code but preserve any user data
+    find /opt/ktv -name '*.py' -delete 2>/dev/null || true
+    find /opt/ktv -name '*.pyc' -delete 2>/dev/null || true
+    find /opt/ktv -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+    
     cp -r daemon/* /opt/ktv/
-    echo "✓ Daemon files copied"
+    echo "✓ Daemon files copied (old code cleaned)"
 else
     echo -e "${RED}Error: Daemon files not found${NC}"
     exit 1
 fi
 
-# Copy configuration
+# Copy configuration and replace ~ with actual home path
 if [ -f "config/config.json" ]; then
-    cp config/config.json /etc/ktv/config.json
-    echo "✓ Configuration copied"
+    USER_HOME=$(eval echo "~$ORIGINAL_USER")
+    sed "s|~|$USER_HOME|g" config/config.json > /etc/ktv/config.json
+    echo "✓ Configuration installed (media path: $USER_HOME)"
 fi
 
-# Set permissions
-chown -R ktv:ktv /opt/ktv
-chown -R ktv:ktv /var/lib/ktv
-chown -R ktv:ktv /var/log/ktv
+# Set permissions on daemon code and data directories
+chown -R "$ORIGINAL_USER:ktv" /opt/ktv
+chown -R "$ORIGINAL_USER:ktv" /var/lib/ktv
+chown -R "$ORIGINAL_USER:ktv" /var/log/ktv
 chmod -R 755 /opt/ktv
+chmod -R 775 /var/lib/ktv
+chmod -R 775 /var/log/ktv
 
-# Media directories need group write permissions
-chmod -R 775 /opt/ktv/media
-chmod g+s /opt/ktv/media/movies
-chmod g+s /opt/ktv/media/clips
-
-# Install systemd service
+# Install systemd service (set actual user)
 echo -e "${GREEN}[8/8] Installing systemd service...${NC}"
 if [ -f "systemd/ktv-daemon.service" ]; then
-    cp systemd/ktv-daemon.service /etc/systemd/system/
+    # Stop old daemon if running
+    systemctl stop ktv-daemon.service 2>/dev/null || true
+    
+    # Replace placeholder with the actual user who will run the daemon
+    sed "s/__DAEMON_USER__/$ORIGINAL_USER/" systemd/ktv-daemon.service > /etc/systemd/system/ktv-daemon.service
+    echo "✓ Service configured to run as user '$ORIGINAL_USER'"
+    
     systemctl daemon-reload
     systemctl enable ktv-daemon.service
     systemctl start ktv-daemon.service
@@ -422,7 +491,7 @@ echo ""
    ```
 
 3. The installation will:
-   - Install MPV and dependencies
+   - Check VLC availability
    - Create KTV user and directories
    - Install Python packages
    - Install and start the KTV daemon service
@@ -454,8 +523,8 @@ If automatic installation fails, you can:
 ## Files and Directories
 
 - `/opt/ktv/` - Main application directory
-- `/opt/ktv/media/movies/` - Movies storage
-- `/opt/ktv/media/clips/` - Clips/playlists storage
+- `~/MM/DD/HH-MM/` - Movies storage (in user's home directory)
+- `~/clips/` - Clips/playlists storage (in user's home directory)
 - `/etc/ktv/config.json` - Configuration file
 - `/var/lib/ktv/schedule.db` - Schedule database
 - `/var/log/ktv/daemon.log` - Application logs
@@ -496,10 +565,13 @@ sudo systemctl restart ktv-daemon
         
         return output_file
     
-    def cleanup(self):
-        """Clean up build directory"""
+    def cleanup(self, clear_cache=False):
+        """Clean up build directory (cache is preserved by default)"""
         if self.build_dir.exists():
             shutil.rmtree(self.build_dir)
+        if clear_cache and self.cache_dir.exists():
+            shutil.rmtree(self.cache_dir)
+            print("✓ Кеш очищен")
     
     def build(self):
         """Build the complete package"""
@@ -540,10 +612,17 @@ def main():
                        help='Output directory (default: offline_package)')
     parser.add_argument('--no-cleanup', action='store_true',
                        help='Keep build directory after completion')
+    parser.add_argument('--clear-cache', action='store_true',
+                       help='Clear download cache and re-download everything')
     
     args = parser.parse_args()
     
     builder = OfflinePackageBuilder(arch=args.arch, output_dir=args.output)
+    
+    if args.clear_cache:
+        print("Очистка кеша...")
+        builder.cleanup(clear_cache=True)
+    
     package = builder.build()
     
     if not args.no_cleanup and package:

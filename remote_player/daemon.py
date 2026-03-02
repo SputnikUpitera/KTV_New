@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Dict, Any
 
+import os
+
 from storage.database import Database
 from api_server import APIServer
 from player import Player
@@ -27,12 +29,20 @@ class KTVDaemon:
         self.config = self._load_config(config_path)
         self.running = False
         
-        # Initialize logging
+        # Expand ~ in paths before using them
+        for key in ('media_base_path', 'clips_folder', 'database_path', 'log_path'):
+            if key in self.config and '~' in str(self.config[key]):
+                self.config[key] = os.path.expanduser(self.config[key])
+        
+        # Initialize logging (after path expansion)
         self._setup_logging()
         
         # Initialize components
         self.db = Database(self.config['database_path'])
-        self.player = Player(self.config['mpv_path'])
+        self.player = Player(
+            vlc_path=self.config.get('vlc_path', '/usr/bin/vlc'),
+            display=self.config.get('display', ':0')
+        )
         self.api_server = APIServer(port=self.config['api_port'])
         
         # These will be initialized in start()
@@ -49,13 +59,15 @@ class KTVDaemon:
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load configuration from file"""
         default_config = {
-            'api_port': 9999,
-            'media_base_path': '/opt/ktv/media',
+            'api_port': 8888,
+            'media_base_path': '~',
+            'clips_folder': '~/clips',
             'database_path': '/var/lib/ktv/schedule.db',
             'log_path': '/var/log/ktv/daemon.log',
             'broadcast_start': '06:00',
             'broadcast_end': '22:00',
-            'mpv_path': '/usr/bin/mpv'
+            'vlc_path': '/usr/bin/vlc',
+            'display': ':0'
         }
         
         try:
@@ -70,17 +82,26 @@ class KTVDaemon:
         return default_config
     
     def _setup_logging(self):
-        """Setup logging configuration"""
+        """Setup logging configuration.
+        Systemd captures stdout/stderr to the log file via StandardOutput/StandardError,
+        so we only need a StreamHandler here. This avoids PermissionError when the
+        log file is owned by root but daemon runs as ktv user.
+        """
+        handlers = [logging.StreamHandler()]
+        
+        # Try to add file handler, but don't fail if permissions deny it
         log_path = Path(self.config['log_path'])
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_path))
+        except (PermissionError, OSError) as e:
+            print(f"Warning: Cannot write to log file {log_path}: {e}")
+            print("Logging to stdout only (captured by systemd)")
         
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_path),
-                logging.StreamHandler()
-            ]
+            handlers=handlers
         )
         
         global logger
@@ -241,8 +262,9 @@ class KTVDaemon:
         # Start API server
         self.api_server.start()
         
-        # Initialize playlist manager
-        self.playlist_manager = PlaylistManager(self.db, self.player, self.config['media_base_path'])
+        # Initialize playlist manager with clips folder
+        clips_folder = self.config.get('clips_folder', os.path.expanduser('~/clips'))
+        self.playlist_manager = PlaylistManager(self.db, self.player, clips_folder)
         self.playlist_manager.start()
         
         # Initialize scheduler

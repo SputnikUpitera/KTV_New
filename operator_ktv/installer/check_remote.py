@@ -38,8 +38,8 @@ class RemoteChecker:
             'arch_compatible': False,
             'python3': None,
             'python3_available': False,
-            'mpv': None,
-            'mpv_available': False,
+            'vlc': None,
+            'vlc_available': False,
             'daemon_installed': False,
             'daemon_running': False,
             'sudo_available': False,
@@ -76,13 +76,13 @@ class RemoteChecker:
                 results['python3_available'] = True
                 logger.info(f"Python3: {results['python3']}")
             
-            # Check MPV
-            logger.info("Checking MPV...")
-            exit_code, stdout, stderr = self.ssh.execute_command('mpv --version 2>/dev/null | head -1')
+            # Check VLC
+            logger.info("Checking VLC...")
+            exit_code, stdout, stderr = self.ssh.execute_command('vlc --version 2>/dev/null | head -1')
             if exit_code == 0:
-                results['mpv'] = stdout.strip()
-                results['mpv_available'] = True
-                logger.info(f"MPV: {results['mpv']}")
+                results['vlc'] = stdout.strip()
+                results['vlc_available'] = True
+                logger.info(f"VLC: {results['vlc']}")
             
             # Check if daemon is installed
             logger.info("Checking daemon installation...")
@@ -161,7 +161,7 @@ class RemoteChecker:
         lines.append(f"OS: {results.get('os', 'Unknown')[:50]}")
         lines.append(f"Architecture: {results.get('arch', 'Unknown')}")
         lines.append(f"Python3: {results.get('python3', 'Not found')}")
-        lines.append(f"MPV: {results.get('mpv', 'Not found')}")
+        lines.append(f"VLC: {results.get('vlc', 'Not found')}")
         lines.append(f"Disk Space: {results.get('disk_space_mb', 0)} MB")
         lines.append(f"Daemon Installed: {'Yes' if results.get('daemon_installed') else 'No'}")
         lines.append(f"Daemon Running: {'Yes' if results.get('daemon_running') else 'No'}")

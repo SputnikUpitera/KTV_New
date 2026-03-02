@@ -181,20 +181,22 @@ class SSHClient:
             return -1, "", "Not connected"
         
         try:
+            use_pty = False
+            
             # Use stored password if sudo_password not explicitly provided
             if sudo and sudo_password is None:
                 sudo_password = self.password
             
             if sudo and sudo_password:
-                # Use sudo -S to read password from stdin
+                # Use sudo -S to read password from stdin, needs pty
                 command = f"sudo -S -p '' {command}"
+                use_pty = True
             elif sudo:
-                # Try sudo without password (may fail if passwordless sudo not configured)
                 command = f"sudo {command}"
             
-            logger.debug(f"Executing: {command[:100]}{'...' if len(command) > 100 else ''}")
+            logger.debug(f"Executing (pty={use_pty}): {command[:100]}{'...' if len(command) > 100 else ''}")
             
-            stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout, get_pty=True)
+            stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout, get_pty=use_pty)
             
             # If using sudo -S, send password to stdin
             if sudo and sudo_password:
@@ -208,9 +210,7 @@ class SSHClient:
             
             # Clean up sudo password prompt from output if present
             if sudo and sudo_password:
-                # Remove password echoes and prompts
                 lines = stdout_text.split('\n')
-                # Skip first line if it looks like password echo
                 if lines and (not lines[0].strip() or '[sudo]' in lines[0]):
                     stdout_text = '\n'.join(lines[1:])
             

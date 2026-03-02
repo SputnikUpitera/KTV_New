@@ -141,8 +141,9 @@ class ClipsTab(QWidget):
         if not ok or not name:
             return
         
-        # Create folder path
-        folder_path = f"/opt/ktv/media/clips/{name}"
+        # Create folder path in user's home ~/clips/
+        home_dir = self._get_remote_home()
+        folder_path = f"{home_dir}/clips/{name}"
         
         try:
             # Create directory on remote system
@@ -282,6 +283,14 @@ class ClipsTab(QWidget):
                 break
         else:
             QMessageBox.information(self, "Успех", f"Загружено {len(files)} файлов в плейлист '{playlist.name}'")
+    
+    def _get_remote_home(self) -> str:
+        """Get the remote user's home directory"""
+        if self.ssh_client and self.ssh_client.is_connected():
+            exit_code, stdout, _ = self.ssh_client.execute_command("echo $HOME")
+            if exit_code == 0 and stdout.strip():
+                return stdout.strip()
+        return "/home/user"
     
     def set_clients(self, ssh_client, cmd_client):
         """Set the SSH and command clients"""
