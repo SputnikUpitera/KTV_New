@@ -4,6 +4,7 @@ Manages scheduled video playback using APScheduler
 """
 
 import logging
+import threading
 from datetime import datetime
 from typing import Optional, Callable
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -35,8 +36,16 @@ class Scheduler:
         self.scheduler = BackgroundScheduler()
         self.job_ids = {}  # Map schedule_id to job_id
         self.running = False
+        self.playback_lock = threading.Lock()
+        self.pending_playbacks = []
+        self.scheduled_playback_active = False
+        self.broadcast_time_check = None
         
         logger.info("Scheduler initialized")
+
+    def set_broadcast_time_check(self, callback: Optional[Callable[[], bool]]):
+        """Set a callback to verify whether scheduled playback is allowed now."""
+        self.broadcast_time_check = callback
     
     def start(self):
         """Start the scheduler"""
@@ -128,39 +137,71 @@ class Scheduler:
             filename: Filename for logging
         """
         logger.info(f"Executing scheduled playback: {filename}")
+
+        if self.broadcast_time_check and not self.broadcast_time_check():
+            logger.warning(
+                "Skipping scheduled playback outside broadcast hours: %s",
+                filename
+            )
+            return
         
         # Check if file exists
         if not Path(filepath).exists():
             logger.error(f"Scheduled file not found: {filepath}")
             return
-        
+
+        with self.playback_lock:
+            if self.scheduled_playback_active:
+                self.pending_playbacks.append((schedule_id, filepath, filename))
+                logger.info("Queued scheduled playback: %s", filename)
+                return
+
+        self._start_scheduled_playback(schedule_id, filepath, filename)
+
+    def _start_scheduled_playback(self, schedule_id: int, filepath: str, filename: str):
+        """Start scheduled playback or queue handling under lock."""
+        with self.playback_lock:
+            self.scheduled_playback_active = True
+
         # Stop playlist if it's playing
         if self.playlist_manager and self.playlist_manager.is_playing():
             logger.info("Pausing playlist for scheduled playback")
             self.playlist_manager.pause()
-        
+
         # Play the scheduled video
         success = self.player.play(filepath, fullscreen=True)
-        
+
         if success:
             logger.info(f"Started scheduled playback: {filename}")
-            
-            # Set callback to resume playlist when playback ends
+
             def on_playback_ended(completed_file):
                 logger.info(f"Scheduled playback ended: {filename}")
-                
-                # Resume playlist if available
-                if self.playlist_manager:
-                    logger.info("Resuming playlist after scheduled playback")
-                    self.playlist_manager.resume()
-            
+                self._finish_scheduled_playback()
+
             self.player.set_playback_ended_callback(on_playback_ended)
-        else:
-            logger.error(f"Failed to start scheduled playback: {filename}")
-            
-            # Resume playlist immediately if playback failed
-            if self.playlist_manager:
-                self.playlist_manager.resume()
+            return
+
+        logger.error(f"Failed to start scheduled playback: {filename}")
+        self._finish_scheduled_playback()
+
+    def _finish_scheduled_playback(self):
+        """Start the next queued scheduled item or resume playlist playback."""
+        next_playback = None
+
+        with self.playback_lock:
+            if self.pending_playbacks:
+                next_playback = self.pending_playbacks.pop(0)
+            else:
+                self.scheduled_playback_active = False
+
+        if next_playback:
+            logger.info("Starting queued scheduled playback: %s", next_playback[2])
+            self._start_scheduled_playback(*next_playback)
+            return
+
+        if self.playlist_manager:
+            logger.info("Resuming playlist after scheduled playback")
+            self.playlist_manager.resume()
     
     def get_next_scheduled_playback(self) -> Optional[dict]:
         """

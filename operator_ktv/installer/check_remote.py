@@ -64,7 +64,7 @@ class RemoteChecker:
             exit_code, stdout, stderr = self.ssh.execute_command('uname -m')
             if exit_code == 0:
                 results['arch'] = stdout.strip()
-                if results['arch'] in ['x86_64', 'amd64', 'armv7l', 'aarch64']:
+                if results['arch'] in ['x86_64', 'amd64']:
                     results['arch_compatible'] = True
                 logger.info(f"Architecture: {results['arch']}")
             
@@ -87,7 +87,7 @@ class RemoteChecker:
             # Check if daemon is installed
             logger.info("Checking daemon installation...")
             exit_code, stdout, stderr = self.ssh.execute_command('test -f /opt/ktv/daemon.py && echo "installed" || echo "not_installed"')
-            if 'installed' in stdout:
+            if stdout.strip() == 'installed':
                 results['daemon_installed'] = True
                 logger.info("Daemon is installed")
             
@@ -95,7 +95,7 @@ class RemoteChecker:
             if results['daemon_installed']:
                 logger.info("Checking daemon status...")
                 exit_code, stdout, stderr = self.ssh.execute_command('systemctl is-active ktv-daemon 2>/dev/null')
-                if 'active' in stdout:
+                if stdout.strip() == 'active':
                     results['daemon_running'] = True
                     logger.info("Daemon is running")
             
@@ -127,7 +127,10 @@ class RemoteChecker:
                 results['errors'].append("Operating system may not be compatible (Ubuntu/Debian recommended)")
             
             if not results['arch_compatible']:
-                results['errors'].append(f"Architecture {results['arch']} may not be supported")
+                results['errors'].append(
+                    f"Architecture {results['arch']} is not supported by the packaged installer "
+                    "(supported: x86_64/amd64)"
+                )
             
             if not results['sudo_available']:
                 results['errors'].append("Sudo is required for installation")

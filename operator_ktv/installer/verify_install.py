@@ -80,7 +80,7 @@ class InstallationVerifier:
             # Check if service is running
             logger.info("Checking if service is running...")
             exit_code, stdout, stderr = self.ssh.execute_command('systemctl is-active ktv-daemon 2>/dev/null')
-            if 'active' in stdout:
+            if stdout.strip() == 'active':
                 results['service_running'] = True
                 logger.info("✓ Service is running")
             else:

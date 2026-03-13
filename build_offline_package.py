@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Build offline package for KTV Linux daemon installation
-This script creates a complete offline installation package
+Build an offline package for KTV daemon installation.
+
+The archive includes daemon files and Python dependencies. VLC must already be
+installed on the target Linux system.
 """
 
-import os
 import sys
 import subprocess
 import shutil
@@ -12,25 +13,15 @@ import argparse
 import tarfile
 from pathlib import Path
 
-# Package URLs for Ubuntu 20.04 (Focal)
-PACKAGE_URLS = {
-    'x86_64': {
-        'mpv': [
-            'http://archive.ubuntu.com/ubuntu/pool/universe/m/mpv/mpv_0.32.0-3ubuntu1_amd64.deb',
-            'http://archive.ubuntu.com/ubuntu/pool/universe/m/mpv/libmpv1_0.32.0-3ubuntu1_amd64.deb',
-        ],
-        'dependencies': [
-            # Core dependencies for mpv
-            'http://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/libavcodec58_4.2.7-0ubuntu0.1_amd64.deb',
-            'http://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/libavformat58_4.2.7-0ubuntu0.1_amd64.deb',
-            'http://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/libavutil56_4.2.7-0ubuntu0.1_amd64.deb',
-            'http://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/libswscale5_4.2.7-0ubuntu0.1_amd64.deb',
-        ]
-    }
-}
+# The daemon now relies on VLC. System packages are no longer bundled into the
+# offline archive, so VLC must already be installed on the target Linux system.
+SUPPORTED_ARCHITECTURES = {'x86_64'}
 
 class OfflinePackageBuilder:
     def __init__(self, arch='x86_64', output_dir='offline_package'):
+        if arch not in SUPPORTED_ARCHITECTURES:
+            supported = ', '.join(sorted(SUPPORTED_ARCHITECTURES))
+            raise ValueError(f"Unsupported architecture: {arch}. Supported: {supported}")
         self.arch = arch
         self.output_dir = Path(output_dir)
         self.build_dir = Path('build_temp')
@@ -60,51 +51,23 @@ class OfflinePackageBuilder:
         print("✓ Directories created")
     
     def download_packages(self):
-        """Download .deb packages (uses cache to avoid re-downloading)"""
-        print(f"[2/7] Downloading packages for {self.arch}...")
+        """Prepare package metadata for required system dependencies."""
+        print(f"[2/7] Preparing system package requirements for {self.arch}...")
         
         packages_dir = self.build_dir / 'packages'
-        
         manifest = []
-        if self.arch in PACKAGE_URLS:
-            for url in PACKAGE_URLS[self.arch]['mpv'] + PACKAGE_URLS[self.arch].get('dependencies', []):
-                manifest.append(url)
         
         manifest_file = packages_dir / 'download_manifest.txt'
         with open(manifest_file, 'w') as f:
             f.write('\n'.join(manifest))
+
+        (packages_dir / 'README.txt').write_text(
+            "No system .deb packages are bundled.\n"
+            "Install VLC on the target Linux system before running install.sh.\n",
+            encoding='utf-8'
+        )
         
-        cached = 0
-        downloaded = 0
-        
-        for url in manifest:
-            filename = os.path.basename(url)
-            cache_path = self.deb_cache / filename
-            build_path = packages_dir / filename
-            
-            # Check cache first
-            if cache_path.exists():
-                shutil.copy2(cache_path, build_path)
-                print(f"  ✓ {filename} (из кеша)")
-                cached += 1
-                continue
-            
-            # Download and cache
-            print(f"  Скачивание {filename}...")
-            try:
-                subprocess.run(['wget', '-q', '-O', str(cache_path), url], check=True)
-            except Exception:
-                try:
-                    subprocess.run(['curl', '-s', '-o', str(cache_path), url], check=True)
-                except Exception:
-                    print(f"  ✗ Не удалось скачать {filename}")
-                    continue
-            
-            shutil.copy2(cache_path, build_path)
-            print(f"  ✓ {filename} (скачано)")
-            downloaded += 1
-        
-        print(f"✓ Пакеты готовы (из кеша: {cached}, скачано: {downloaded})")
+        print("✓ No system packages bundled; VLC must be pre-installed on Linux")
         
     def _get_requirements_hash(self) -> str:
         """Get a hash of requirements file to detect changes"""
@@ -266,18 +229,18 @@ if [ "$ARCH" != "x86_64" ]; then
 fi
 
 # Install .deb packages
-echo -e "${GREEN}[1/8] Installing system packages...${NC}"
+echo -e "${GREEN}[1/9] Preparing system packages...${NC}"
 cd packages
 if ls *.deb 1> /dev/null 2>&1; then
     dpkg -i *.deb 2>/dev/null || apt-get install -f -y
     echo "✓ System packages installed"
 else
-    echo -e "${YELLOW}Warning: No .deb packages found. VLC should be pre-installed.${NC}"
+    echo -e "${YELLOW}Warning: No bundled .deb packages found. VLC must already be installed.${NC}"
 fi
 cd ..
 
 # Check if python3 is available
-echo -e "${GREEN}[2/8] Checking Python3...${NC}"
+echo -e "${GREEN}[2/9] Checking Python3...${NC}"
 if ! command -v python3 &> /dev/null; then
     echo -e "${RED}Error: Python3 is not installed${NC}"
     exit 1
@@ -286,7 +249,7 @@ PYTHON_VERSION=$(python3 --version)
 echo "✓ Found $PYTHON_VERSION"
 
 # Check if VLC is available
-echo -e "${GREEN}[3/8] Checking VLC...${NC}"
+echo -e "${GREEN}[3/9] Checking VLC...${NC}"
 if ! command -v vlc &> /dev/null; then
     echo -e "${RED}Error: VLC is not installed${NC}"
     exit 1
@@ -295,7 +258,7 @@ VLC_VERSION=$(vlc --version 2>/dev/null | head -1)
 echo "✓ Found $VLC_VERSION"
 
 # Create KTV user and group
-echo -e "${GREEN}[4/8] Creating KTV user and group...${NC}"
+echo -e "${GREEN}[4/9] Creating KTV user and group...${NC}"
 if id "ktv" &>/dev/null; then
     echo "✓ User 'ktv' already exists"
 else
@@ -311,7 +274,7 @@ if [ "$ORIGINAL_USER" != "root" ]; then
 fi
 
 # Create directories
-echo -e "${GREEN}[5/8] Creating directories...${NC}"
+echo -e "${GREEN}[5/9] Creating directories...${NC}"
 mkdir -p /opt/ktv
 mkdir -p /var/lib/ktv
 mkdir -p /var/log/ktv
@@ -341,7 +304,7 @@ chmod -R 775 /var/log/ktv
 echo "✓ Directories created with proper permissions"
 
 # Install Python packages
-echo -e "${GREEN}[6/8] Installing Python packages...${NC}"
+echo -e "${GREEN}[6/9] Installing Python packages...${NC}"
 
 # Check if pip3 is available, install if not
 if ! command -v pip3 &> /dev/null; then
@@ -366,7 +329,7 @@ else
 fi
 
 # Copy daemon files (clean old files first to avoid stale code)
-echo -e "${GREEN}[7/8] Installing daemon...${NC}"
+echo -e "${GREEN}[7/9] Installing daemon...${NC}"
 if [ -d "daemon" ]; then
     # Remove old daemon code but preserve any user data
     find /opt/ktv -name '*.py' -delete 2>/dev/null || true
@@ -396,7 +359,7 @@ chmod -R 775 /var/lib/ktv
 chmod -R 775 /var/log/ktv
 
 # Install systemd service (set actual user)
-echo -e "${GREEN}[8/8] Installing systemd service...${NC}"
+echo -e "${GREEN}[8/9] Installing systemd service...${NC}"
 if [ -f "systemd/ktv-daemon.service" ]; then
     # Stop old daemon if running
     systemctl stop ktv-daemon.service 2>/dev/null || true
@@ -455,7 +418,7 @@ echo ""
 echo -e "${YELLOW}IMPORTANT: User '$ORIGINAL_USER' was added to 'ktv' group.${NC}"
 echo -e "${YELLOW}You must log out and log back in for file upload permissions to work!${NC}"
 echo ""
-echo -e "${YELLOW}API Port: 8888 (не конфликтует со старой системой на порту 9999)${NC}"
+echo -e "${YELLOW}API Port: 8888${NC}"
 echo ""
 """
         
@@ -476,6 +439,7 @@ echo ""
 - At least 500MB free disk space
 - SSH server installed and running
 - sudo privileges
+- VLC installed on the target Linux system
 
 ## Installation Instructions
 
@@ -491,7 +455,7 @@ echo ""
    ```
 
 3. The installation will:
-   - Check VLC availability
+   - Verify that VLC is already installed
    - Create KTV user and directories
    - Install Python packages
    - Install and start the KTV daemon service
@@ -505,11 +469,10 @@ echo ""
 
 If automatic installation fails, you can:
 
-1. Install packages manually:
+1. Install VLC manually if it is missing:
    ```
-   cd packages
-   sudo dpkg -i *.deb
-   sudo apt-get install -f
+   sudo apt update
+   sudo apt install vlc
    ```
 
 2. Follow the steps in install.sh manually
@@ -591,6 +554,7 @@ sudo systemctl restart ktv-daemon
             print(f"\nPackage location: {package_file}")
             print("\nThis package should be embedded in the Windows GUI application.")
             print("The GUI will transfer and install it on the remote Linux system.")
+            print("Note: VLC must be installed on the target Linux system before installation.")
             
             return package_file
             
@@ -606,7 +570,7 @@ sudo systemctl restart ktv-daemon
 
 def main():
     parser = argparse.ArgumentParser(description='Build KTV offline installation package')
-    parser.add_argument('--arch', default='x86_64', choices=['x86_64', 'armv7l'],
+    parser.add_argument('--arch', default='x86_64', choices=['x86_64'],
                        help='Target architecture (default: x86_64)')
     parser.add_argument('--output', default='offline_package',
                        help='Output directory (default: offline_package)')

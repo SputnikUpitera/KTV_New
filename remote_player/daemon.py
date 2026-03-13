@@ -276,6 +276,7 @@ class KTVDaemon:
             self.scheduler, self.playlist_manager,
             self.config['broadcast_start'], self.config['broadcast_end']
         )
+        self.scheduler.set_broadcast_time_check(self.time_controller.is_broadcast_time)
         self.time_controller.start()
         
         self.running = True
