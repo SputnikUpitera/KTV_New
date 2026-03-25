@@ -183,7 +183,8 @@ class MainWindow(QMainWindow):
         """Connect to remote system with retry logic"""
         if not self.connection_info:
             return
-        
+
+        success = False
         for attempt in range(retry_count):
             if attempt > 0:
                 self.update_status(f"Повторная попытка {attempt + 1}/{retry_count}...")
@@ -247,16 +248,21 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.StandardButton.Yes:
                 self.install_software()
             else:
-                self.update_status(f"Подключено (daemon не активен)")
+                self.disconnect()
+                self.update_status("Не подключено")
     
     def disconnect(self):
         """Disconnect from remote system"""
-        if self.ssh_client:
-            self.ssh_client.disconnect()
-        
+        self.status_timer.stop()
         self.connected = False
         self.cmd_client = None
-        self.status_timer.stop()
+
+        self.movies_tab.set_cmd_client(None)
+        self.clips_tab.set_cmd_client(None)
+
+        if self.ssh_client:
+            self.ssh_client.disconnect()
+
         self.current_playback_label.setText("Нет данных")
         self.next_clip_label.setText("Следующий клип: —")
         self.update_status("Не подключено")
@@ -536,6 +542,6 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event"""
-        if self.connected:
+        if self.connected or self.cmd_client or self.ssh_client.is_connected():
             self.disconnect()
         event.accept()

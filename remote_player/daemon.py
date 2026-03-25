@@ -10,6 +10,7 @@ import logging
 import json
 import time
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -21,11 +22,7 @@ from player import Player
 from scheduler import Scheduler
 from playlist_manager import PlaylistManager
 from time_controller import TimeController
-from ktv_paths import (
-    build_movie_file_path,
-    build_playlist_directory,
-    parse_movie_path,
-)
+from ktv_paths import parse_movie_path
 
 
 class KTVDaemon:
@@ -68,6 +65,7 @@ class KTVDaemon:
             'api_port': 8888,
             'media_base_path': '~/oktv',
             'clips_folder': '~/oktv/clips',
+            'aggressive_normalization': False,
             'database_path': '/var/lib/ktv/schedule.db',
             'log_path': '/var/log/ktv/daemon.log',
             'broadcast_start': '06:00',
@@ -148,13 +146,31 @@ class KTVDaemon:
     
     def _handle_add_schedule(self, params: Dict) -> Dict:
         """Handle add_schedule command"""
+        target_path = self._build_schedule_target_path(
+            params['month'],
+            params['day'],
+            params['hour'],
+            params['minute'],
+            params['filename']
+        )
+        source_path = Path(params['filepath'])
+        actual_path = source_path
+        actual_filename = params['filename']
+
+        if source_path != target_path:
+            move_result = self._safe_move(source_path, target_path)
+            if not move_result['success']:
+                raise RuntimeError(move_result['error'])
+            actual_path = move_result['target_path']
+            actual_filename = move_result['target_path'].name
+
         schedule_id = self.db.add_schedule(
             month=params['month'],
             day=params['day'],
             hour=params['hour'],
             minute=params['minute'],
-            filepath=params['filepath'],
-            filename=params['filename'],
+            filepath=str(actual_path),
+            filename=actual_filename,
             category=params.get('category', 'movies')
         )
         
@@ -206,20 +222,16 @@ class KTVDaemon:
         if not schedule:
             raise ValueError('Schedule not found')
 
-        filename = schedule['filename']
         source_path = Path(schedule['filepath'])
-        target_path = Path(
-            build_movie_file_path(
-                str(self.media_root.parent),
-                params['month'],
-                params['day'],
-                params['hour'],
-                params['minute'],
-                filename
-            )
+        target_path = self._build_schedule_target_path(
+            params['month'],
+            params['day'],
+            params['hour'],
+            params['minute'],
+            schedule['filename']
         )
 
-        move_result = self._move_media_file(source_path, target_path)
+        move_result = self._safe_move(source_path, target_path)
         if not move_result['success']:
             raise RuntimeError(move_result['error'])
 
@@ -229,17 +241,19 @@ class KTVDaemon:
             day=params['day'],
             hour=params['hour'],
             minute=params['minute'],
-            filepath=str(target_path),
-            filename=filename
+            filepath=str(move_result['target_path']),
+            filename=move_result['target_path'].name
         )
         self._reload_runtime_state()
-        return {'success': success, 'filepath': str(target_path)}
+        return {'success': success, 'filepath': str(move_result['target_path'])}
     
     def _handle_create_playlist(self, params: Dict) -> Dict:
         """Handle create_playlist command"""
+        folder_path = self._build_playlist_directory(params['name'])
+        folder_path.mkdir(parents=True, exist_ok=True)
         playlist_id = self.db.create_playlist(
             name=params['name'],
-            folder_path=params['folder_path']
+            folder_path=str(folder_path)
         )
         if not self.db.get_active_playlist():
             self.db.set_active_playlist(playlist_id)
@@ -342,9 +356,11 @@ class KTVDaemon:
         """Start the daemon"""
         logger.info("Starting KTV Daemon...")
 
-        self.media_root = Path(self.config.get('media_base_path', os.path.expanduser('~/oktv')))
-        self.clips_root = Path(self.config.get('clips_folder', os.path.expanduser('~/oktv/clips')))
-        self.media_root.mkdir(parents=True, exist_ok=True)
+        self.media_base_path = Path(self.config.get('media_base_path', os.path.expanduser('~/oktv')))
+        self.clips_root = self.media_base_path / 'clips'
+        self.config['media_base_path'] = str(self.media_base_path)
+        self.config['clips_folder'] = str(self.clips_root)
+        self.media_base_path.mkdir(parents=True, exist_ok=True)
         self.clips_root.mkdir(parents=True, exist_ok=True)
         
         # Register API handlers
@@ -357,8 +373,7 @@ class KTVDaemon:
         self.api_server.start()
         
         # Initialize playlist manager with clips folder
-        clips_folder = self.config.get('clips_folder', os.path.expanduser('~/oktv/clips'))
-        self.playlist_manager = PlaylistManager(self.db, self.player, clips_folder)
+        self.playlist_manager = PlaylistManager(self.db, self.player, str(self.clips_root))
         self.playlist_manager.start()
         
         # Initialize scheduler
@@ -414,8 +429,30 @@ class KTVDaemon:
         if self.playlist_manager:
             self.playlist_manager.reload_active_playlist()
 
-    def _move_media_file(self, source_path: Path, target_path: Path) -> Dict:
-        """Move a media file to a canonical target path."""
+    def _build_schedule_target_path(self, month: int, day: int, hour: int, minute: int,
+                                    filename: str) -> Path:
+        """Build the canonical target path for a scheduled movie."""
+        return (
+            self.media_base_path
+            / f"{month:02d}"
+            / f"{day:02d}"
+            / f"{hour:02d}-{minute:02d}"
+            / Path(filename).name
+        )
+
+    def _build_playlist_directory(self, playlist_name: str) -> Path:
+        """Build the canonical directory for a playlist."""
+        return self.clips_root / playlist_name.strip()
+
+    def _build_conflict_path(self, target_path: Path) -> Path:
+        """Build a conflict-safe target path."""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        suffix = target_path.suffix
+        stem = target_path.stem
+        return target_path.with_name(f"{stem}_{timestamp}{suffix}")
+
+    def _safe_move(self, source_path: Path, target_path: Path) -> Dict:
+        """Safely move a file and avoid overwriting an existing target."""
         source_path = Path(source_path)
         target_path = Path(target_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -423,18 +460,22 @@ class KTVDaemon:
         if source_path == target_path:
             if not target_path.exists():
                 return {'success': False, 'error': f'File not found: {target_path}'}
-            return {'success': True}
+            return {'success': True, 'target_path': target_path}
 
         if source_path.exists():
             try:
-                shutil.move(str(source_path), str(target_path))
-                logger.info("Moved media file: %s -> %s", source_path, target_path)
-                return {'success': True}
+                actual_target = target_path
+                if actual_target.exists():
+                    actual_target = self._build_conflict_path(actual_target)
+
+                shutil.move(str(source_path), str(actual_target))
+                logger.info("Moved media file: %s -> %s", source_path, actual_target)
+                return {'success': True, 'target_path': actual_target}
             except Exception as exc:
                 return {'success': False, 'error': f'Could not move file: {exc}'}
 
         if target_path.exists():
-            return {'success': True}
+            return {'success': True, 'target_path': target_path}
 
         return {'success': False, 'error': f'File not found: {source_path}'}
 
@@ -442,10 +483,16 @@ class KTVDaemon:
         """Check whether a path is a supported media file."""
         return path.is_file() and path.suffix.lower() in PlaylistManager.VIDEO_EXTENSIONS
 
+    def _is_aggressive_normalization_enabled(self) -> bool:
+        """Check whether sync is allowed to move operator files automatically."""
+        return bool(self.config.get('aggressive_normalization', False))
+
     def _iter_movie_files(self) -> List[Path]:
         """Collect movie files under the canonical schedule root."""
         movie_files: List[Path] = []
-        for file_path in self.media_root.rglob('*'):
+        for file_path in self.media_base_path.rglob('*'):
+            if file_path.is_relative_to(self.clips_root):
+                continue
             if self._is_video_file(file_path):
                 movie_files.append(file_path)
         movie_files.sort(key=lambda item: str(item))
@@ -453,7 +500,7 @@ class KTVDaemon:
 
     def sync_schedules(self) -> Dict:
         """Synchronize schedule rows with canonical movie directories."""
-        self.media_root.mkdir(parents=True, exist_ok=True)
+        self.media_base_path.mkdir(parents=True, exist_ok=True)
 
         imported = 0
         moved = 0
@@ -461,41 +508,66 @@ class KTVDaemon:
 
         schedules = self.db.list_schedules(category='movies')
         known_paths = {}
-        home_dir = str(self.media_root.parent)
+        aggressive = self._is_aggressive_normalization_enabled()
 
         for schedule in schedules:
-            expected_path = Path(
-                build_movie_file_path(
-                    home_dir,
-                    schedule['month'],
-                    schedule['day'],
-                    schedule['hour'],
-                    schedule['minute'],
-                    schedule['filename']
-                )
+            expected_path = self._build_schedule_target_path(
+                schedule['month'],
+                schedule['day'],
+                schedule['hour'],
+                schedule['minute'],
+                schedule['filename']
             )
             expected_path.parent.mkdir(parents=True, exist_ok=True)
             ensured_dirs += 1
 
             current_path = Path(schedule['filepath'])
-            if current_path != expected_path:
-                move_result = self._move_media_file(current_path, expected_path)
-                if move_result.get('success'):
-                    if current_path != expected_path and (current_path.exists() or expected_path.exists()):
-                        moved += 1
-                else:
-                    logger.warning("Could not align schedule file %s: %s", current_path, move_result['error'])
+            actual_path = current_path
+            actual_filename = schedule['filename']
 
-            self.db.update_schedule(
-                schedule_id=schedule['id'],
-                month=schedule['month'],
-                day=schedule['day'],
-                hour=schedule['hour'],
-                minute=schedule['minute'],
-                filepath=str(expected_path),
-                filename=expected_path.name
-            )
-            known_paths[str(expected_path)] = schedule['id']
+            if current_path == expected_path:
+                known_paths[str(current_path)] = schedule['id']
+                continue
+
+            if current_path.exists():
+                if aggressive:
+                    move_result = self._safe_move(current_path, expected_path)
+                    if move_result.get('success'):
+                        actual_path = move_result['target_path']
+                        actual_filename = move_result['target_path'].name
+                        moved += 1
+                        self.db.update_schedule(
+                            schedule_id=schedule['id'],
+                            month=schedule['month'],
+                            day=schedule['day'],
+                            hour=schedule['hour'],
+                            minute=schedule['minute'],
+                            filepath=str(actual_path),
+                            filename=actual_filename
+                        )
+                    else:
+                        logger.error("Fixed: could not align schedule file %s: %s", current_path, move_result['error'])
+                else:
+                    logger.warning(
+                        "Fixed: leaving non-canonical schedule path unchanged (aggressive_normalization disabled): %s",
+                        current_path
+                    )
+            elif expected_path.exists():
+                actual_path = expected_path
+                actual_filename = expected_path.name
+                self.db.update_schedule(
+                    schedule_id=schedule['id'],
+                    month=schedule['month'],
+                    day=schedule['day'],
+                    hour=schedule['hour'],
+                    minute=schedule['minute'],
+                    filepath=str(actual_path),
+                    filename=actual_filename
+                )
+            else:
+                logger.error("Fixed: schedule file missing, keeping DB row unchanged: %s", current_path)
+
+            known_paths[str(actual_path)] = schedule['id']
 
         for file_path in self._iter_movie_files():
             file_key = str(file_path)
@@ -529,7 +601,7 @@ class KTVDaemon:
     def _migrate_default_clips(self) -> int:
         """Move loose clip files into a visible default playlist."""
         default_name = 'Основной'
-        default_dir = Path(build_playlist_directory(str(self.clips_root.parent), default_name))
+        default_dir = self._build_playlist_directory(default_name)
         default_dir.mkdir(parents=True, exist_ok=True)
 
         moved_files = 0
@@ -538,11 +610,17 @@ class KTVDaemon:
                 continue
             target_path = default_dir / entry.name
             if entry != target_path:
-                shutil.move(str(entry), str(target_path))
-                moved_files += 1
+                move_result = self._safe_move(entry, target_path)
+                if move_result['success']:
+                    moved_files += 1
+                else:
+                    logger.error("Fixed: could not move default clip %s: %s", entry, move_result['error'])
 
         if moved_files:
-            self.db.ensure_playlist(default_name, str(default_dir))
+            try:
+                self.db.ensure_playlist(default_name, str(default_dir), folder_aligned=True)
+            except ValueError as exc:
+                logger.error("Fixed: %s", exc)
 
         return moved_files
 
@@ -557,30 +635,59 @@ class KTVDaemon:
 
         playlists = self.db.list_playlists()
         known_names = {playlist['name'] for playlist in playlists}
-        home_dir = str(self.clips_root.parent.parent)
+        aggressive = self._is_aggressive_normalization_enabled()
 
         for playlist in playlists:
             current_dir = Path(playlist['folder_path'])
-            expected_dir = Path(build_playlist_directory(home_dir, playlist['name']))
-            should_move = current_dir != expected_dir and current_dir.exists() and not expected_dir.exists()
-            if should_move:
-                shutil.move(str(current_dir), str(expected_dir))
-            expected_dir.mkdir(parents=True, exist_ok=True)
+            expected_dir = self._build_playlist_directory(playlist['name'])
 
-            if playlist['folder_path'] != str(expected_dir):
-                self.db.update_playlist_folder(playlist['id'], str(expected_dir))
+            if current_dir == expected_dir:
+                expected_dir.mkdir(parents=True, exist_ok=True)
+                continue
+
+            if current_dir.exists():
+                if aggressive and not expected_dir.exists():
+                    try:
+                        shutil.move(str(current_dir), str(expected_dir))
+                        self.db.ensure_playlist(
+                            playlist['name'],
+                            str(expected_dir),
+                            folder_aligned=True
+                        )
+                        updated += 1
+                    except Exception as exc:
+                        logger.error("Fixed: could not move playlist '%s': %s", playlist['name'], exc)
+                else:
+                    logger.warning(
+                        "Fixed: leaving playlist path unchanged for '%s' (non-destructive sync)",
+                        playlist['name']
+                    )
+                continue
+
+            if expected_dir.exists():
+                self.db.ensure_playlist(
+                    playlist['name'],
+                    str(expected_dir),
+                    folder_aligned=True
+                )
                 updated += 1
+                continue
+
+            logger.warning("Fixed: playlist directories missing for '%s', leaving DB unchanged", playlist['name'])
 
         for entry in sorted(self.clips_root.iterdir(), key=lambda item: item.name.lower()):
             if not entry.is_dir():
                 continue
 
-            _, was_created = self.db.ensure_playlist(entry.name, str(entry))
-            if was_created:
-                created += 1
-                known_names.add(entry.name)
-            elif entry.name not in known_names:
-                imported += 1
+            try:
+                _, was_created = self.db.ensure_playlist(entry.name, str(entry))
+                if was_created:
+                    created += 1
+                    known_names.add(entry.name)
+                elif entry.name not in known_names:
+                    imported += 1
+            except ValueError as exc:
+                logger.error("Fixed: %s", exc)
 
         refreshed_playlists = self.db.list_playlists()
         if refreshed_playlists and not self.db.get_active_playlist():

@@ -40,6 +40,7 @@ class ClipsTab(QWidget):
         self.playlists = []
 
         self.setup_ui()
+        self.set_cmd_client(cmd_client)
 
     def setup_ui(self):
         """Setup the user interface."""
@@ -58,21 +59,21 @@ class ClipsTab(QWidget):
 
         playlist_btn_layout = QHBoxLayout()
 
-        create_btn = QPushButton("Создать")
-        create_btn.clicked.connect(self.create_playlist)
-        playlist_btn_layout.addWidget(create_btn)
+        self.create_btn = QPushButton("Создать")
+        self.create_btn.clicked.connect(self.create_playlist)
+        playlist_btn_layout.addWidget(self.create_btn)
 
-        activate_btn = QPushButton("Активировать")
-        activate_btn.clicked.connect(self.activate_selected_playlist)
-        playlist_btn_layout.addWidget(activate_btn)
+        self.activate_btn = QPushButton("Активировать")
+        self.activate_btn.clicked.connect(self.activate_selected_playlist)
+        playlist_btn_layout.addWidget(self.activate_btn)
 
-        delete_btn = QPushButton("Удалить")
-        delete_btn.clicked.connect(self.delete_playlist)
-        playlist_btn_layout.addWidget(delete_btn)
+        self.delete_btn = QPushButton("Удалить")
+        self.delete_btn.clicked.connect(self.delete_playlist)
+        playlist_btn_layout.addWidget(self.delete_btn)
 
-        refresh_btn = QPushButton("Обновить")
-        refresh_btn.clicked.connect(self.refresh_playlists)
-        playlist_btn_layout.addWidget(refresh_btn)
+        self.refresh_btn = QPushButton("Обновить")
+        self.refresh_btn.clicked.connect(self.refresh_playlists)
+        playlist_btn_layout.addWidget(self.refresh_btn)
 
         left_layout.addLayout(playlist_btn_layout)
         main_layout.addLayout(left_layout, 4)
@@ -91,6 +92,7 @@ class ClipsTab(QWidget):
         self.drop_area = QFrame()
         self.drop_area.setAcceptDrops(True)
         self.drop_area.dragEnterEvent = self.drag_enter_event
+        self.drop_area.dragMoveEvent = self.drag_move_event
         self.drop_area.dropEvent = self.drop_event
         self.drop_area.setStyleSheet("""
             QFrame {
@@ -131,6 +133,7 @@ class ClipsTab(QWidget):
     def refresh_playlists(self):
         """Reload playlists from the remote system after daemon-side sync."""
         if not self.cmd_client:
+            QMessageBox.information(self, "Информация", "Нет подключения к daemon")
             return
 
         current_name = self._selected_playlist().name if self._selected_playlist() else None
@@ -309,6 +312,11 @@ class ClipsTab(QWidget):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
+    def drag_move_event(self, event):
+        """Handle drag move event."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
     def drop_event(self, event):
         """Handle drop event for file drops."""
         if not event.mimeData().hasUrls():
@@ -374,4 +382,23 @@ class ClipsTab(QWidget):
     def set_clients(self, ssh_client, cmd_client):
         """Set the SSH and command clients."""
         self.ssh_client = ssh_client
+        self.set_cmd_client(cmd_client)
+
+    def set_cmd_client(self, client):
+        """Set command client and update enabled state."""
+        self.cmd_client = client
+        enabled = client is not None
+        self.playlist_list.setEnabled(enabled)
+        self.files_list.setEnabled(enabled)
+        self.drop_area.setEnabled(enabled)
+        self.create_btn.setEnabled(enabled)
+        self.activate_btn.setEnabled(enabled)
+        self.delete_btn.setEnabled(enabled)
+        self.refresh_btn.setEnabled(enabled)
+
+        if not enabled:
+            self.playlist_list.clear()
+            self.files_list.clear()
+            self.selection_label.setText("Плейлист не выбран")
+            self.path_label.setText("Каталог: —")
         self.cmd_client = cmd_client

@@ -235,11 +235,16 @@ class Database:
                 logger.info("Updated playlist ID %s folder to %s", playlist_id, folder_path)
             return updated
 
-    def ensure_playlist(self, name: str, folder_path: str) -> Tuple[int, bool]:
-        """Create a playlist if it does not exist, otherwise keep its folder path aligned."""
+    def ensure_playlist(self, name: str, folder_path: str, folder_aligned: bool = False) -> Tuple[int, bool]:
+        """Create a playlist or update its path only after a confirmed filesystem move."""
         existing = self.get_playlist_by_name(name)
         if existing:
             if existing['folder_path'] != folder_path:
+                if not folder_aligned:
+                    raise ValueError(
+                        f"Playlist folder mismatch for '{name}': "
+                        f"{existing['folder_path']} -> {folder_path}"
+                    )
                 self.update_playlist_folder(existing['id'], folder_path)
             return existing['id'], False
 

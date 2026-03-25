@@ -26,10 +26,12 @@ class Player:
         self.is_playing = False
         self.monitor_thread: Optional[threading.Thread] = None
         self.playback_ended_callback: Optional[Callable] = None
+        self.callback_lock = threading.Lock()
     
-    def set_playback_ended_callback(self, callback: Callable[[str], None]):
+    def set_playback_ended_callback(self, callback: Optional[Callable[[str], None]] = None):
         """Set callback to be called when playback ends"""
-        self.playback_ended_callback = callback
+        with self.callback_lock:
+            self.playback_ended_callback = callback
     
     def play(self, filepath: str, fullscreen: bool = True) -> bool:
         """
@@ -160,9 +162,12 @@ class Player:
             logger.warning(f"Playback ended with code {return_code}: {Path(filepath).name if filepath else 'unknown'}")
         
         # Call callback if set
-        if self.playback_ended_callback and filepath:
+        with self.callback_lock:
+            callback = self.playback_ended_callback
+
+        if callback and filepath:
             try:
-                self.playback_ended_callback(filepath)
+                callback(filepath)
             except Exception as e:
                 logger.error(f"Error in playback ended callback: {e}")
     

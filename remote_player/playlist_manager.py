@@ -5,7 +5,6 @@ Manages continuous background playlist playback
 
 import logging
 import os
-import random
 import threading
 import time
 from pathlib import Path
@@ -44,6 +43,7 @@ class PlaylistManager:
         self.current_files: List[Path] = []
         self.current_index = 0
         self.current_playlist_file: Optional[Path] = None
+        self.state_lock = threading.Lock()
         
         # Ensure media directories exist
         self.clips_path.mkdir(parents=True, exist_ok=True)
@@ -87,7 +87,8 @@ class PlaylistManager:
         
         logger.info("Pausing playlist playback")
         self.paused = True
-        self.current_playlist_file = None
+        with self.state_lock:
+            self.current_playlist_file = None
         
         # Stop current playback if it's from the playlist
         if self.player.is_playing:
@@ -107,23 +108,29 @@ class PlaylistManager:
     
     def reload_active_playlist(self):
         """Reload the active playlist from database"""
-        self.current_playlist = self.db.get_active_playlist()
-        
-        if self.current_playlist:
-            folder_path = Path(self.current_playlist['folder_path'])
-            self.current_files = self._scan_video_files(folder_path)
-            self.current_index = 0
-            self.current_playlist_file = None
-            
-            logger.info(f"Loaded playlist '{self.current_playlist['name']}' with {len(self.current_files)} files")
+        active_playlist = self.db.get_active_playlist()
+
+        if active_playlist:
+            folder_path = Path(active_playlist['folder_path'])
+            current_files = self._scan_video_files(folder_path)
+            with self.state_lock:
+                self.current_playlist = active_playlist
+                self.current_files = current_files
+                self.current_index = 0
+                self.current_playlist_file = None
+
+            logger.info(f"Loaded playlist '{active_playlist['name']}' with {len(current_files)} files")
         else:
             # No active playlist, scan default clips folder
-            self.current_files = self._scan_video_files(self.clips_path)
-            self.current_index = 0
-            self.current_playlist_file = None
-            
-            if self.current_files:
-                logger.info(f"No active playlist, using default clips folder with {len(self.current_files)} files")
+            current_files = self._scan_video_files(self.clips_path)
+            with self.state_lock:
+                self.current_playlist = None
+                self.current_files = current_files
+                self.current_index = 0
+                self.current_playlist_file = None
+
+            if current_files:
+                logger.info(f"No active playlist, using default clips folder with {len(current_files)} files")
             else:
                 logger.warning("No active playlist and no files in clips folder")
     
@@ -164,8 +171,12 @@ class PlaylistManager:
         
         while self.running:
             try:
+                with self.state_lock:
+                    paused = self.paused
+                    has_files = bool(self.current_files)
+
                 # Check if we should be playing
-                if self.paused or not self.current_files:
+                if paused or not has_files:
                     time.sleep(1)
                     continue
                 
@@ -179,7 +190,8 @@ class PlaylistManager:
                 
                 if video_file and video_file.exists():
                     logger.info(f"Playing from playlist: {video_file.name}")
-                    self.current_playlist_file = video_file
+                    with self.state_lock:
+                        self.current_playlist_file = video_file
                     
                     # Play the video
                     success = self.player.play(str(video_file), fullscreen=True)
@@ -188,15 +200,18 @@ class PlaylistManager:
                         # Wait for playback to complete
                         while self.player.is_playing and self.running and not self.paused:
                             time.sleep(1)
-                        self.current_playlist_file = None
+                        with self.state_lock:
+                            self.current_playlist_file = None
                     else:
                         logger.error(f"Failed to play: {video_file.name}")
-                        self.current_playlist_file = None
+                        with self.state_lock:
+                            self.current_playlist_file = None
                         time.sleep(2)
                 else:
                     # No valid video file, wait and retry
                     logger.warning("No valid video file to play")
-                    self.current_playlist_file = None
+                    with self.state_lock:
+                        self.current_playlist_file = None
                     time.sleep(5)
                     
                     # Try reloading playlist
@@ -215,28 +230,28 @@ class PlaylistManager:
         Returns:
             Path to next video file or None
         """
-        if not self.current_files:
-            return None
-        
-        # Get current file
-        video_file = self.current_files[self.current_index]
-        
-        # Move to next index (loop around)
-        self.current_index = (self.current_index + 1) % len(self.current_files)
-        
-        return video_file
+        with self.state_lock:
+            if not self.current_files:
+                return None
+
+            # Thread-safe: playback loop owns next-index progression.
+            video_file = self.current_files[self.current_index]
+            self.current_index = (self.current_index + 1) % len(self.current_files)
+            return video_file
     
     def get_active_playlist_name(self) -> Optional[str]:
         """Get the name of the active playlist"""
-        if self.current_playlist:
-            return self.current_playlist['name']
-        return None
+        with self.state_lock:
+            if self.current_playlist:
+                return self.current_playlist['name']
+            return None
     
     def get_current_file(self) -> Optional[str]:
         """Get the currently playing file from playlist"""
-        if self.player.is_playing and not self.paused and self.current_playlist_file:
-            return str(self.current_playlist_file)
-        return None
+        with self.state_lock:
+            if self.player.is_playing and not self.paused and self.current_playlist_file:
+                return str(self.current_playlist_file)
+            return None
 
     def get_current_filename(self) -> Optional[str]:
         """Get the name of the currently playing playlist file."""
@@ -245,10 +260,11 @@ class PlaylistManager:
 
     def get_next_file(self) -> Optional[str]:
         """Preview the next file that the playlist loop will start."""
-        if not self.current_files:
-            return None
-        next_file = self.current_files[self.current_index]
-        return str(next_file)
+        with self.state_lock:
+            if not self.current_files:
+                return None
+            next_file = self.current_files[self.current_index]
+            return str(next_file)
 
     def get_next_filename(self) -> Optional[str]:
         """Preview the next playlist filename."""

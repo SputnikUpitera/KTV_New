@@ -46,6 +46,7 @@ class MoviesTab(QWidget):
 
         self.setup_ui()
         self.create_tree_structure()
+        self.set_cmd_client(cmd_client)
 
     def setup_ui(self):
         """Setup the user interface."""
@@ -74,23 +75,23 @@ class MoviesTab(QWidget):
 
         button_layout = QHBoxLayout()
 
-        refresh_btn = QPushButton("Обновить")
-        refresh_btn.clicked.connect(self.refresh_schedules)
-        button_layout.addWidget(refresh_btn)
+        self.refresh_btn = QPushButton("Обновить")
+        self.refresh_btn.clicked.connect(self.refresh_schedules)
+        button_layout.addWidget(self.refresh_btn)
 
-        edit_btn = QPushButton("Изменить время")
-        edit_btn.clicked.connect(self.edit_selected_schedule)
-        button_layout.addWidget(edit_btn)
+        self.edit_btn = QPushButton("Изменить время")
+        self.edit_btn.clicked.connect(self.edit_selected_schedule)
+        button_layout.addWidget(self.edit_btn)
 
-        toggle_btn = QPushButton("Вкл/выкл")
-        toggle_btn.clicked.connect(self.toggle_selected_schedule)
-        button_layout.addWidget(toggle_btn)
+        self.toggle_btn = QPushButton("Вкл/выкл")
+        self.toggle_btn.clicked.connect(self.toggle_selected_schedule)
+        button_layout.addWidget(self.toggle_btn)
 
         button_layout.addStretch()
 
-        delete_btn = QPushButton("Удалить")
-        delete_btn.clicked.connect(self.delete_selected)
-        button_layout.addWidget(delete_btn)
+        self.delete_btn = QPushButton("Удалить")
+        self.delete_btn.clicked.connect(self.delete_selected)
+        button_layout.addWidget(self.delete_btn)
 
         layout.addLayout(button_layout)
         self.setLayout(layout)
@@ -130,6 +131,7 @@ class MoviesTab(QWidget):
     def refresh_schedules(self):
         """Reload schedules from the remote system after daemon-side sync."""
         if not self.cmd_client:
+            QMessageBox.information(self, "Информация", "Нет подключения к daemon")
             return
 
         try:
@@ -419,4 +421,15 @@ class MoviesTab(QWidget):
     def set_clients(self, ssh_client, cmd_client):
         """Set the SSH and command clients."""
         self.ssh_client = ssh_client
+        self.set_cmd_client(cmd_client)
+
+    def set_cmd_client(self, client):
+        """Set command client and update enabled state."""
+        self.cmd_client = client
+        enabled = client is not None
+        self.tree.setEnabled(enabled)
+        self.refresh_btn.setEnabled(enabled)
+        self.edit_btn.setEnabled(enabled)
+        self.toggle_btn.setEnabled(enabled)
+        self.delete_btn.setEnabled(enabled)
         self.cmd_client = cmd_client

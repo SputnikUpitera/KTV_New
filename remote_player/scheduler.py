@@ -36,11 +36,12 @@ class Scheduler:
         self.scheduler = BackgroundScheduler()
         self.job_ids = {}  # Map schedule_id to job_id
         self.running = False
-        self.playback_lock = threading.Lock()
+        self._playback_lock = threading.Lock()
         self.pending_playbacks = []
         self.scheduled_playback_active = False
         self.broadcast_time_check = None
         self.current_scheduled_playback = None
+        self._previous_playback_callback = None
         
         logger.info("Scheduler initialized")
 
@@ -82,7 +83,7 @@ class Scheduler:
         self.job_ids.clear()
         
         # Load enabled schedules from database
-        schedules = self.db.list_schedules(enabled_only=True)
+        schedules = self.db.list_schedules(enabled_only=True, category='movies')
         
         for schedule in schedules:
             self._add_schedule_job(schedule)
@@ -151,23 +152,24 @@ class Scheduler:
             logger.error(f"Scheduled file not found: {filepath}")
             return
 
-        with self.playback_lock:
+        with self._playback_lock:
             if self.scheduled_playback_active:
                 self.pending_playbacks.append((schedule_id, filepath, filename))
                 logger.info("Queued scheduled playback: %s", filename)
                 return
-
-        self._start_scheduled_playback(schedule_id, filepath, filename)
-
-    def _start_scheduled_playback(self, schedule_id: int, filepath: str, filename: str):
-        """Start scheduled playback or queue handling under lock."""
-        with self.playback_lock:
             self.scheduled_playback_active = True
             self.current_scheduled_playback = {
                 'schedule_id': schedule_id,
                 'filepath': filepath,
                 'filename': filename,
             }
+
+        self._start_scheduled_playback(schedule_id, filepath, filename)
+
+    def _start_scheduled_playback(self, schedule_id: int, filepath: str, filename: str):
+        """Start scheduled playback or queue handling under lock."""
+        # Fixed: scheduled playback must not inherit stale callbacks.
+        self.player.set_playback_ended_callback(None)
 
         # Stop playlist if it's playing
         if self.playlist_manager and self.playlist_manager.is_playing():
@@ -184,6 +186,7 @@ class Scheduler:
                 logger.info(f"Scheduled playback ended: {filename}")
                 self._finish_scheduled_playback()
 
+            self._previous_playback_callback = None
             self.player.set_playback_ended_callback(on_playback_ended)
             return
 
@@ -194,9 +197,16 @@ class Scheduler:
         """Start the next queued scheduled item or resume playlist playback."""
         next_playback = None
 
-        with self.playback_lock:
+        self.player.set_playback_ended_callback(self._previous_playback_callback)
+
+        with self._playback_lock:
             if self.pending_playbacks:
                 next_playback = self.pending_playbacks.pop(0)
+                self.current_scheduled_playback = {
+                    'schedule_id': next_playback[0],
+                    'filepath': next_playback[1],
+                    'filename': next_playback[2],
+                }
             else:
                 self.scheduled_playback_active = False
                 self.current_scheduled_playback = None
@@ -240,7 +250,7 @@ class Scheduler:
 
     def get_current_scheduled_playback(self) -> Optional[dict]:
         """Get the currently playing scheduled movie, if any."""
-        with self.playback_lock:
+        with self._playback_lock:
             if not self.current_scheduled_playback:
                 return None
             return dict(self.current_scheduled_playback)
