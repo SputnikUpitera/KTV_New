@@ -40,6 +40,7 @@ class Scheduler:
         self.pending_playbacks = []
         self.scheduled_playback_active = False
         self.broadcast_time_check = None
+        self.current_scheduled_playback = None
         
         logger.info("Scheduler initialized")
 
@@ -162,6 +163,11 @@ class Scheduler:
         """Start scheduled playback or queue handling under lock."""
         with self.playback_lock:
             self.scheduled_playback_active = True
+            self.current_scheduled_playback = {
+                'schedule_id': schedule_id,
+                'filepath': filepath,
+                'filename': filename,
+            }
 
         # Stop playlist if it's playing
         if self.playlist_manager and self.playlist_manager.is_playing():
@@ -193,6 +199,7 @@ class Scheduler:
                 next_playback = self.pending_playbacks.pop(0)
             else:
                 self.scheduled_playback_active = False
+                self.current_scheduled_playback = None
 
         if next_playback:
             logger.info("Starting queued scheduled playback: %s", next_playback[2])
@@ -230,6 +237,13 @@ class Scheduler:
     def get_scheduled_count(self) -> int:
         """Get number of active scheduled jobs"""
         return len(self.scheduler.get_jobs())
+
+    def get_current_scheduled_playback(self) -> Optional[dict]:
+        """Get the currently playing scheduled movie, if any."""
+        with self.playback_lock:
+            if not self.current_scheduled_playback:
+                return None
+            return dict(self.current_scheduled_playback)
 
 
 # Test functionality

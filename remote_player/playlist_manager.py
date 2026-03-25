@@ -23,7 +23,7 @@ class PlaylistManager:
     # Supported video formats
     VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.webm', '.mov', '.flv', '.wmv', '.m4v'}
     
-    def __init__(self, database, player, clips_path: str = '~/clips'):
+    def __init__(self, database, player, clips_path: str = '~/oktv/clips'):
         """
         Initialize playlist manager
         
@@ -43,6 +43,7 @@ class PlaylistManager:
         self.current_playlist: Optional[dict] = None
         self.current_files: List[Path] = []
         self.current_index = 0
+        self.current_playlist_file: Optional[Path] = None
         
         # Ensure media directories exist
         self.clips_path.mkdir(parents=True, exist_ok=True)
@@ -86,6 +87,7 @@ class PlaylistManager:
         
         logger.info("Pausing playlist playback")
         self.paused = True
+        self.current_playlist_file = None
         
         # Stop current playback if it's from the playlist
         if self.player.is_playing:
@@ -111,12 +113,14 @@ class PlaylistManager:
             folder_path = Path(self.current_playlist['folder_path'])
             self.current_files = self._scan_video_files(folder_path)
             self.current_index = 0
+            self.current_playlist_file = None
             
             logger.info(f"Loaded playlist '{self.current_playlist['name']}' with {len(self.current_files)} files")
         else:
             # No active playlist, scan default clips folder
             self.current_files = self._scan_video_files(self.clips_path)
             self.current_index = 0
+            self.current_playlist_file = None
             
             if self.current_files:
                 logger.info(f"No active playlist, using default clips folder with {len(self.current_files)} files")
@@ -175,6 +179,7 @@ class PlaylistManager:
                 
                 if video_file and video_file.exists():
                     logger.info(f"Playing from playlist: {video_file.name}")
+                    self.current_playlist_file = video_file
                     
                     # Play the video
                     success = self.player.play(str(video_file), fullscreen=True)
@@ -183,12 +188,15 @@ class PlaylistManager:
                         # Wait for playback to complete
                         while self.player.is_playing and self.running and not self.paused:
                             time.sleep(1)
+                        self.current_playlist_file = None
                     else:
                         logger.error(f"Failed to play: {video_file.name}")
+                        self.current_playlist_file = None
                         time.sleep(2)
                 else:
                     # No valid video file, wait and retry
                     logger.warning("No valid video file to play")
+                    self.current_playlist_file = None
                     time.sleep(5)
                     
                     # Try reloading playlist
@@ -226,9 +234,26 @@ class PlaylistManager:
     
     def get_current_file(self) -> Optional[str]:
         """Get the currently playing file from playlist"""
-        if self.player.is_playing and not self.paused:
-            return self.player.current_file
+        if self.player.is_playing and not self.paused and self.current_playlist_file:
+            return str(self.current_playlist_file)
         return None
+
+    def get_current_filename(self) -> Optional[str]:
+        """Get the name of the currently playing playlist file."""
+        current_file = self.get_current_file()
+        return Path(current_file).name if current_file else None
+
+    def get_next_file(self) -> Optional[str]:
+        """Preview the next file that the playlist loop will start."""
+        if not self.current_files:
+            return None
+        next_file = self.current_files[self.current_index]
+        return str(next_file)
+
+    def get_next_filename(self) -> Optional[str]:
+        """Preview the next playlist filename."""
+        next_file = self.get_next_file()
+        return Path(next_file).name if next_file else None
 
 
 # Test functionality

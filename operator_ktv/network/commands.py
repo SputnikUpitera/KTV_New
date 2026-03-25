@@ -160,6 +160,23 @@ except Exception as e:
         success, result, error = self.send_command('list_schedules', params)
         schedules = result.get('schedules', []) if result else []
         return success, schedules, error
+
+    def update_schedule(self, schedule_id: int, month: int, day: int, hour: int, minute: int) -> Tuple[bool, Dict, str]:
+        """Update the time and canonical file path for a schedule."""
+        params = {
+            'schedule_id': schedule_id,
+            'month': month,
+            'day': day,
+            'hour': hour,
+            'minute': minute,
+        }
+        success, result, error = self.send_command('update_schedule', params)
+        return success, result or {}, error
+
+    def sync_schedules(self) -> Tuple[bool, Dict, str]:
+        """Synchronize movie schedule rows with filesystem directories."""
+        success, result, error = self.send_command('sync_schedules')
+        return success, result or {}, error
     
     def create_playlist(self, name: str, folder_path: str) -> Tuple[bool, int, str]:
         """Create a new playlist"""
@@ -186,6 +203,11 @@ except Exception as e:
         success, result, error = self.send_command('list_playlists')
         playlists = result.get('playlists', []) if result else []
         return success, playlists, error
+
+    def sync_playlists(self) -> Tuple[bool, Dict, str]:
+        """Synchronize playlist rows with playlist directories."""
+        success, result, error = self.send_command('sync_playlists')
+        return success, result or {}, error
     
     def get_status(self) -> Tuple[bool, Dict, str]:
         """Get daemon status"""

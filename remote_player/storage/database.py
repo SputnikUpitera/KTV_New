@@ -133,6 +133,29 @@ class Database:
             cursor.execute('SELECT * FROM schedule WHERE id = ?', (schedule_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    def update_schedule(self, schedule_id: int, month: int, day: int, hour: int, minute: int,
+                        filepath: str, filename: str) -> bool:
+        """Update a schedule entry and its file location."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE schedule
+                SET month = ?, day = ?, hour = ?, minute = ?, filepath = ?, filename = ?
+                WHERE id = ?
+            ''', (month, day, hour, minute, filepath, filename, schedule_id))
+            conn.commit()
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.info(
+                    "Updated schedule ID %s to %02d/%02d %02d:%02d",
+                    schedule_id,
+                    month,
+                    day,
+                    hour,
+                    minute
+                )
+            return updated
     
     def list_schedules(self, enabled_only: bool = False, category: Optional[str] = None) -> List[Dict]:
         """List all schedule entries"""
@@ -180,6 +203,48 @@ class Database:
             playlist_id = cursor.lastrowid
             logger.info(f"Created playlist: {name} at {folder_path}")
             return playlist_id
+
+    def get_playlist(self, playlist_id: int) -> Optional[Dict]:
+        """Get a playlist by ID."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM playlists WHERE id = ?', (playlist_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_playlist_by_name(self, name: str) -> Optional[Dict]:
+        """Get a playlist by its unique name."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM playlists WHERE name = ?', (name,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def update_playlist_folder(self, playlist_id: int, folder_path: str) -> bool:
+        """Update the storage folder for an existing playlist."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE playlists
+                SET folder_path = ?
+                WHERE id = ?
+            ''', (folder_path, playlist_id))
+            conn.commit()
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.info("Updated playlist ID %s folder to %s", playlist_id, folder_path)
+            return updated
+
+    def ensure_playlist(self, name: str, folder_path: str) -> Tuple[int, bool]:
+        """Create a playlist if it does not exist, otherwise keep its folder path aligned."""
+        existing = self.get_playlist_by_name(name)
+        if existing:
+            if existing['folder_path'] != folder_path:
+                self.update_playlist_folder(existing['id'], folder_path)
+            return existing['id'], False
+
+        playlist_id = self.create_playlist(name, folder_path)
+        return playlist_id, True
     
     def delete_playlist(self, playlist_id: int) -> bool:
         """Delete a playlist"""

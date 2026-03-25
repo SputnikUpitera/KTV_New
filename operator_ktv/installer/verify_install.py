@@ -101,14 +101,14 @@ class InstallationVerifier:
                 results['errors'].append("Database file not found")
                 logger.warning("✗ Database not found")
             
-            # Check media directories (home-based structure)
+            # Check media directories (oktv-based structure)
             logger.info("Checking media directories...")
-            exit_code, stdout, stderr = self.ssh.execute_command('test -d ~/clips && echo "yes" || echo "no"')
+            exit_code, stdout, stderr = self.ssh.execute_command('test -d ~/oktv/clips && echo "yes" || echo "no"')
             if 'yes' in stdout:
                 results['media_directories_exist'] = True
                 logger.info("✓ Media directories exist")
             else:
-                results['errors'].append("Clips directory ~/clips not found")
+                results['errors'].append("Clips directory ~/oktv/clips not found")
                 logger.warning("✗ Media directories not found")
             
             # Check config file

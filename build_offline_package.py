@@ -183,8 +183,8 @@ WantedBy=multi-user.target
         print("[6/7] Creating configuration...")
         config_content = """{
     "api_port": 8888,
-    "media_base_path": "~",
-    "clips_folder": "~/clips",
+    "media_base_path": "~/oktv",
+    "clips_folder": "~/oktv/clips",
     "database_path": "/var/lib/ktv/schedule.db",
     "log_path": "/var/log/ktv/daemon.log",
     "broadcast_start": "06:00",
@@ -406,8 +406,8 @@ fi
 echo -e "${GREEN}=== Installation Complete ===${NC}"
 echo ""
 echo "Configuration file: /etc/ktv/config.json"
-echo "Media directory: ~/ (home folder, structure MM/DD/HH-MM/)"
-echo "Clips directory: ~/clips/"
+echo "Media directory: ~/oktv/MM/DD/HH-MM/"
+echo "Clips directory: ~/oktv/clips/"
 echo "Logs: /var/log/ktv/daemon.log"
 echo ""
 echo "Service commands:"
@@ -486,8 +486,8 @@ If automatic installation fails, you can:
 ## Files and Directories
 
 - `/opt/ktv/` - Main application directory
-- `~/MM/DD/HH-MM/` - Movies storage (in user's home directory)
-- `~/clips/` - Clips/playlists storage (in user's home directory)
+- `~/oktv/MM/DD/HH-MM/` - Movies storage
+- `~/oktv/clips/` - Clips/playlists storage
 - `/etc/ktv/config.json` - Configuration file
 - `/var/lib/ktv/schedule.db` - Schedule database
 - `/var/log/ktv/daemon.log` - Application logs

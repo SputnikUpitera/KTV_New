@@ -1,10 +1,20 @@
 """
-Main window for Operator KTV application
+Main window for Operator KTV application.
 """
 
-from PyQt6.QtWidgets import (QMainWindow, QTabWidget, QStatusBar, QMenuBar,
-                             QMenu, QMessageBox, QDialog, QVBoxLayout,
-                             QLabel, QWidget, QProgressDialog)
+from PyQt6.QtWidgets import (
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QProgressDialog,
+    QMessageBox,
+    QSplitter,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
+)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction
 import logging
@@ -37,6 +47,13 @@ class MainWindow(QMainWindow):
         
         self.setup_ui()
         self.setup_menu()
+
+        self.movies_tab.schedule_changed.connect(self.refresh_playback_status)
+        self.clips_tab.playlist_changed.connect(self.refresh_playback_status)
+
+        self.status_timer = QTimer(self)
+        self.status_timer.setInterval(5000)
+        self.status_timer.timeout.connect(self.refresh_playback_status)
         
         # Show connection dialog on startup
         QTimer.singleShot(100, self.show_connection_dialog)
@@ -44,20 +61,49 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Setup the user interface"""
         self.setWindowTitle("OperatorKTV - Управление медиа")
-        self.setFixedSize(480, 480)
-        
-        # Central widget with tabs
-        self.tabs = QTabWidget()
-        
-        # Movies tab
+        self.resize(1100, 720)
+        self.setMinimumSize(900, 620)
+
+        central_widget = QWidget()
+        central_layout = QVBoxLayout(central_widget)
+        central_layout.setContentsMargins(12, 12, 12, 12)
+        central_layout.setSpacing(12)
+
+        status_frame = QFrame()
+        status_frame.setObjectName("playbackStatusFrame")
+        status_layout = QVBoxLayout(status_frame)
+        status_layout.setContentsMargins(16, 14, 16, 14)
+        status_layout.setSpacing(6)
+
+        status_caption = QLabel("Сейчас воспроизводится")
+        status_caption.setStyleSheet("color: #9a9a9a; font-size: 11px; letter-spacing: 0.4px;")
+        status_layout.addWidget(status_caption)
+
+        self.current_playback_label = QLabel("Нет данных")
+        self.current_playback_label.setStyleSheet("font-size: 20px; font-weight: 600;")
+        self.current_playback_label.setWordWrap(True)
+        status_layout.addWidget(self.current_playback_label)
+
+        self.next_clip_label = QLabel("Следующий клип: —")
+        self.next_clip_label.setStyleSheet("color: #8a8a8a; font-size: 13px;")
+        self.next_clip_label.setWordWrap(True)
+        status_layout.addWidget(self.next_clip_label)
+
+        central_layout.addWidget(status_frame)
+
         self.movies_tab = MoviesTab()
-        self.tabs.addTab(self.movies_tab, "Фильмы")
-        
-        # Clips tab
         self.clips_tab = ClipsTab()
-        self.tabs.addTab(self.clips_tab, "Клипы")
-        
-        self.setCentralWidget(self.tabs)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self.movies_tab)
+        splitter.addWidget(self.clips_tab)
+        splitter.setChildrenCollapsible(False)
+        splitter.setStretchFactor(0, 6)
+        splitter.setStretchFactor(1, 5)
+        splitter.setSizes([620, 480])
+        central_layout.addWidget(splitter, 1)
+
+        self.setCentralWidget(central_widget)
         
         # Status bar
         self.status_bar = QStatusBar()
@@ -185,6 +231,8 @@ class MainWindow(QMainWindow):
             # Refresh data
             self.movies_tab.refresh_schedules()
             self.clips_tab.refresh_playlists()
+            self.refresh_playback_status()
+            self.status_timer.start()
             
             QMessageBox.information(self, "Успех", "Подключено к удалённой системе")
         else:
@@ -208,11 +256,46 @@ class MainWindow(QMainWindow):
         
         self.connected = False
         self.cmd_client = None
+        self.status_timer.stop()
+        self.current_playback_label.setText("Нет данных")
+        self.next_clip_label.setText("Следующий клип: —")
         self.update_status("Не подключено")
     
     def update_status(self, message: str):
         """Update status bar message"""
         self.status_bar.showMessage(message)
+
+    def refresh_playback_status(self):
+        """Refresh the compact playback banner in the main window."""
+        if not self.cmd_client:
+            self.current_playback_label.setText("Нет данных")
+            self.next_clip_label.setText("Следующий клип: —")
+            return
+
+        success, status, error = self.cmd_client.get_status()
+        if not success:
+            logger.warning("Could not refresh playback status: %s", error)
+            self.current_playback_label.setText("Статус недоступен")
+            self.next_clip_label.setText("Следующий клип: —")
+            return
+
+        current = status.get('current_playback', {})
+        source = current.get('source')
+        filename = current.get('filename')
+
+        if source == 'movie' and filename:
+            self.current_playback_label.setText(f"Фильм: {filename}")
+        elif source == 'clip' and filename:
+            playlist_name = status.get('playlist', {}).get('active') or "плейлист"
+            self.current_playback_label.setText(f"Клип: {filename}  [{playlist_name}]")
+        else:
+            self.current_playback_label.setText("Сейчас ничего не воспроизводится")
+
+        next_clip = status.get('next_clip', {}).get('filename')
+        if next_clip:
+            self.next_clip_label.setText(f"Следующий клип: {next_clip}")
+        else:
+            self.next_clip_label.setText("Следующий клип: —")
     
     def show_terminal(self):
         """Show SSH terminal window"""
@@ -343,6 +426,16 @@ class MainWindow(QMainWindow):
             
             if status.get('player', {}).get('current_file'):
                 info_lines.append(f"Текущий файл: {status['player']['filename']}")
+
+            current_playback = status.get('current_playback', {})
+            if current_playback.get('source'):
+                info_lines.append(
+                    f"Источник: {'Фильм' if current_playback['source'] == 'movie' else 'Клип'}"
+                )
+
+            next_clip = status.get('next_clip', {}).get('filename')
+            if next_clip:
+                info_lines.append(f"Следующий клип: {next_clip}")
             
             if 'broadcast_hours' in status:
                 info_lines.append(f"Часы вещания: {status['broadcast_hours']['start']} - {status['broadcast_hours']['end']}")

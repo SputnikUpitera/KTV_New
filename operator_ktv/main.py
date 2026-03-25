@@ -82,11 +82,48 @@ def setup_dark_theme(app):
             background-color: #2a82da;
             border: 1px solid white;
         }
+        QFrame#playbackStatusFrame {
+            background-color: #25282d;
+            border: 1px solid #373c44;
+            border-radius: 12px;
+        }
+        QSplitter::handle {
+            background-color: #2f2f2f;
+            width: 6px;
+        }
+        QTreeWidget, QListWidget {
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            padding: 4px;
+        }
         QTreeWidget::item:hover {
             background-color: #404040;
         }
         QTreeWidget::item:selected {
             background-color: #2a82da;
+        }
+        QListWidget::item:hover {
+            background-color: #404040;
+        }
+        QListWidget::item:selected {
+            background-color: #2a82da;
+            color: #000000;
+        }
+        QPushButton {
+            min-height: 32px;
+            padding: 4px 12px;
+            border: 1px solid #4a4a4a;
+            border-radius: 8px;
+            background-color: #363636;
+        }
+        QPushButton:hover {
+            background-color: #434343;
+        }
+        QPushButton:pressed {
+            background-color: #2d2d2d;
+        }
+        QPushButton:focus, QListWidget:focus, QTreeWidget:focus {
+            border: 1px solid #63a4ff;
         }
     """)
 

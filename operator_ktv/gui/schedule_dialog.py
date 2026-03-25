@@ -11,19 +11,26 @@ from pathlib import Path
 class ScheduleDialog(QDialog):
     """Dialog for scheduling video playback time"""
     
-    def __init__(self, filename: str, month: int, day: int, parent=None):
+    def __init__(self, filename: str, month: int, day: int, parent=None,
+                 initial_hour: int = 12, initial_minute: int = 0,
+                 dialog_title: str = "Выбор времени воспроизведения",
+                 action_text: str = "Подтвердить"):
         super().__init__(parent)
         
         self.filename = filename
         self.month = month
         self.day = day
         self.selected_time = None
+        self.initial_hour = initial_hour
+        self.initial_minute = initial_minute
+        self.dialog_title = dialog_title
+        self.action_text = action_text
         
         self.setup_ui()
         
     def setup_ui(self):
         """Setup the user interface"""
-        self.setWindowTitle("Выбор времени воспроизведения")
+        self.setWindowTitle(self.dialog_title)
         self.setModal(True)
         self.setFixedSize(400, 200)
         
@@ -50,7 +57,7 @@ class ScheduleDialog(QDialog):
         
         self.time_edit = QTimeEdit()
         self.time_edit.setDisplayFormat("HH:mm")
-        self.time_edit.setTime(QTime(12, 0))  # Default to 12:00
+        self.time_edit.setTime(QTime(self.initial_hour, self.initial_minute))
         time_layout.addWidget(self.time_edit)
         
         layout.addLayout(time_layout)
@@ -65,7 +72,7 @@ class ScheduleDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
         
-        ok_btn = QPushButton("Подтвердить")
+        ok_btn = QPushButton(self.action_text)
         ok_btn.clicked.connect(self.accept)
         ok_btn.setDefault(True)
         button_layout.addWidget(ok_btn)
