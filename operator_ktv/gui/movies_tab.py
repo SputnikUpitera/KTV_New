@@ -137,8 +137,12 @@ class MoviesTab(QWidget):
         try:
             sync_success, _, sync_error = self.cmd_client.sync_schedules()
             if not sync_success:
-                QMessageBox.warning(self, "Ошибка", f"Не удалось синхронизировать расписание:\n{sync_error}")
-                return
+                if "Unknown command: sync_schedules" in sync_error:
+                    # Fixed: allow older daemon versions to keep working without sync support.
+                    logger.warning("Daemon does not support sync_schedules, loading schedules without sync")
+                else:
+                    QMessageBox.warning(self, "Ошибка", f"Не удалось синхронизировать расписание:\n{sync_error}")
+                    return
 
             success, schedules_data, error = self.cmd_client.list_schedules(category='movies')
             if not success:
@@ -432,4 +436,3 @@ class MoviesTab(QWidget):
         self.edit_btn.setEnabled(enabled)
         self.toggle_btn.setEnabled(enabled)
         self.delete_btn.setEnabled(enabled)
-        self.cmd_client = cmd_client

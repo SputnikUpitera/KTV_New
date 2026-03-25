@@ -141,8 +141,12 @@ class ClipsTab(QWidget):
         try:
             sync_success, _, sync_error = self.cmd_client.sync_playlists()
             if not sync_success:
-                QMessageBox.warning(self, "Ошибка", f"Не удалось синхронизировать плейлисты:\n{sync_error}")
-                return
+                if "Unknown command: sync_playlists" in sync_error:
+                    # Fixed: allow older daemon versions to keep working without sync support.
+                    logger.warning("Daemon does not support sync_playlists, loading playlists without sync")
+                else:
+                    QMessageBox.warning(self, "Ошибка", f"Не удалось синхронизировать плейлисты:\n{sync_error}")
+                    return
 
             success, playlists_data, error = self.cmd_client.list_playlists()
             if not success:
@@ -401,4 +405,3 @@ class ClipsTab(QWidget):
             self.files_list.clear()
             self.selection_label.setText("Плейлист не выбран")
             self.path_label.setText("Каталог: —")
-        self.cmd_client = cmd_client

@@ -483,6 +483,14 @@ class KTVDaemon:
         """Check whether a path is a supported media file."""
         return path.is_file() and path.suffix.lower() in PlaylistManager.VIDEO_EXTENSIONS
 
+    def _is_under_clips_root(self, path: Path) -> bool:
+        """Check whether a path belongs to the clips subtree."""
+        try:
+            path.relative_to(self.clips_root)
+            return True
+        except ValueError:
+            return False
+
     def _is_aggressive_normalization_enabled(self) -> bool:
         """Check whether sync is allowed to move operator files automatically."""
         return bool(self.config.get('aggressive_normalization', False))
@@ -491,7 +499,7 @@ class KTVDaemon:
         """Collect movie files under the canonical schedule root."""
         movie_files: List[Path] = []
         for file_path in self.media_base_path.rglob('*'):
-            if file_path.is_relative_to(self.clips_root):
+            if self._is_under_clips_root(file_path):
                 continue
             if self._is_video_file(file_path):
                 movie_files.append(file_path)

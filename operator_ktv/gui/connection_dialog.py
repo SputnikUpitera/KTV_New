@@ -2,10 +2,10 @@
 Connection dialog for SSH connection setup and installation
 """
 
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+from PyQt6.QtWidgets import (QCheckBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QSpinBox, QMessageBox,
                              QProgressDialog, QTextEdit)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QSettings, pyqtSignal
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ class ConnectionDialog(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.settings = QSettings()
         
         self.host = ""
         self.port = 22
@@ -29,7 +30,7 @@ class ConnectionDialog(QDialog):
         """Setup the user interface"""
         self.setWindowTitle("Подключение к удалённой системе")
         self.setModal(True)
-        self.setFixedSize(450, 250)
+        self.setFixedSize(450, 290)
         
         layout = QVBoxLayout()
         
@@ -82,6 +83,9 @@ class ConnectionDialog(QDialog):
         pass_layout.addWidget(self.pass_edit)
         
         layout.addLayout(pass_layout)
+
+        self.remember_password_check = QCheckBox("Запомнить пароль")
+        layout.addWidget(self.remember_password_check)
         
         layout.addSpacing(20)
         layout.addStretch()
@@ -102,6 +106,7 @@ class ConnectionDialog(QDialog):
         layout.addLayout(button_layout)
         
         self.setLayout(layout)
+        self.load_settings()
     
     def get_connection_info(self) -> dict:
         """
@@ -114,7 +119,8 @@ class ConnectionDialog(QDialog):
             'host': self.ip_edit.text().strip(),
             'port': self.port_spin.value(),
             'username': self.user_edit.text().strip(),
-            'password': self.pass_edit.text()
+            'password': self.pass_edit.text(),
+            'remember_password': self.remember_password_check.isChecked(),
         }
     
     def set_connection_info(self, info: dict):
@@ -127,3 +133,36 @@ class ConnectionDialog(QDialog):
             self.user_edit.setText(info['username'])
         if 'password' in info:
             self.pass_edit.setText(info['password'])
+        if 'remember_password' in info:
+            self.remember_password_check.setChecked(bool(info['remember_password']))
+
+    def load_settings(self):
+        """Load saved connection parameters."""
+        self.ip_edit.setText(self.settings.value("connection/host", "", str))
+        self.port_spin.setValue(self.settings.value("connection/port", 22, int))
+        self.user_edit.setText(self.settings.value("connection/username", "", str))
+
+        remember_password = self.settings.value("connection/remember_password", False, bool)
+        self.remember_password_check.setChecked(remember_password)
+        if remember_password:
+            self.pass_edit.setText(self.settings.value("connection/password", "", str))
+        else:
+            self.pass_edit.clear()
+
+    def save_settings(self):
+        """Persist connection parameters between launches."""
+        info = self.get_connection_info()
+        self.settings.setValue("connection/host", info['host'])
+        self.settings.setValue("connection/port", info['port'])
+        self.settings.setValue("connection/username", info['username'])
+        self.settings.setValue("connection/remember_password", info['remember_password'])
+
+        if info['remember_password']:
+            self.settings.setValue("connection/password", info['password'])
+        else:
+            self.settings.remove("connection/password")
+
+    def accept(self):
+        """Save connection parameters before closing."""
+        self.save_settings()
+        super().accept()

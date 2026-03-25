@@ -17,6 +17,16 @@ from pathlib import Path
 # offline archive, so VLC must already be installed on the target Linux system.
 SUPPORTED_ARCHITECTURES = {'x86_64'}
 
+
+def configure_console_output():
+    """Make console output safe for Windows terminals with legacy encodings."""
+    for stream_name in ('stdout', 'stderr'):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, 'reconfigure', None)
+        if reconfigure:
+            reconfigure(encoding='utf-8', errors='replace')
+
+
 class OfflinePackageBuilder:
     def __init__(self, arch='x86_64', output_dir='offline_package'):
         if arch not in SUPPORTED_ARCHITECTURES:
@@ -141,9 +151,12 @@ class OfflinePackageBuilder:
         print("[4/7] Copying daemon files...")
         daemon_src = Path('remote_player')
         daemon_dst = self.build_dir / 'daemon'
+        shared_paths_src = Path('ktv_paths.py')
         
         if daemon_src.exists():
             shutil.copytree(daemon_src, daemon_dst, dirs_exist_ok=True)
+            if shared_paths_src.exists():
+                shutil.copy2(shared_paths_src, daemon_dst / 'ktv_paths.py')
             print("✓ Daemon files copied")
         else:
             print("✗ Daemon source directory not found. Will create placeholder.")
@@ -283,10 +296,11 @@ mkdir -p /etc/ktv
 # Create clips folder in user's home directory
 if [ "$ORIGINAL_USER" != "root" ]; then
     USER_HOME=$(eval echo "~$ORIGINAL_USER")
-    mkdir -p "$USER_HOME/clips"
-    chown "$ORIGINAL_USER:ktv" "$USER_HOME/clips"
-    chmod 775 "$USER_HOME/clips"
-    echo "✓ Created clips directory: $USER_HOME/clips"
+    mkdir -p "$USER_HOME/oktv/clips"
+    chown -R "$ORIGINAL_USER:ktv" "$USER_HOME/oktv"
+    chmod 775 "$USER_HOME/oktv"
+    chmod 775 "$USER_HOME/oktv/clips"
+    echo "✓ Created clips directory: $USER_HOME/oktv/clips"
 fi
 
 # Pre-create log file
@@ -569,6 +583,7 @@ sudo systemctl restart ktv-daemon
             pass
 
 def main():
+    configure_console_output()
     parser = argparse.ArgumentParser(description='Build KTV offline installation package')
     parser.add_argument('--arch', default='x86_64', choices=['x86_64'],
                        help='Target architecture (default: x86_64)')

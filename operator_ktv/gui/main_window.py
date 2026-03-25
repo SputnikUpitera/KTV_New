@@ -178,6 +178,8 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self.connection_info = dialog.get_connection_info()
             self.connect_to_remote()
+            if not self.connection_info.get('remember_password'):
+                self.connection_info['password'] = ""
     
     def connect_to_remote(self, retry_count=2):
         """Connect to remote system with retry logic"""
@@ -288,16 +290,25 @@ class MainWindow(QMainWindow):
         current = status.get('current_playback', {})
         source = current.get('source')
         filename = current.get('filename')
+        player_status = status.get('player', {})
+        playlist_status = status.get('playlist', {})
 
         if source == 'movie' and filename:
             self.current_playback_label.setText(f"Фильм: {filename}")
         elif source == 'clip' and filename:
-            playlist_name = status.get('playlist', {}).get('active') or "плейлист"
+            playlist_name = playlist_status.get('active') or "плейлист"
             self.current_playback_label.setText(f"Клип: {filename}  [{playlist_name}]")
+        elif player_status.get('is_playing') and player_status.get('filename'):
+            fallback_filename = player_status['filename']
+            if playlist_status.get('playing'):
+                playlist_name = playlist_status.get('active') or "плейлист"
+                self.current_playback_label.setText(f"Клип: {fallback_filename}  [{playlist_name}]")
+            else:
+                self.current_playback_label.setText(f"Воспроизводится: {fallback_filename}")
         else:
             self.current_playback_label.setText("Сейчас ничего не воспроизводится")
 
-        next_clip = status.get('next_clip', {}).get('filename')
+        next_clip = status.get('next_clip', {}).get('filename') or playlist_status.get('next_filename')
         if next_clip:
             self.next_clip_label.setText(f"Следующий клип: {next_clip}")
         else:
