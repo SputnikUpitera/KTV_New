@@ -56,11 +56,11 @@ class MoviesTab(QWidget):
         """Setup the user interface."""
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 10, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
         self.section_label = QLabel("Фильмы:")
-        self.section_label.setObjectName("sectionHeaderLabel")
-        self.section_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.section_label.setObjectName("playlistSectionLabel")
+        self.section_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.section_label)
 
         self.tree = QTreeWidget()
@@ -76,6 +76,7 @@ class MoviesTab(QWidget):
         layout.addWidget(self.tree, 1)
 
         button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(8)
 
         self.refresh_btn = QPushButton("Обновить")

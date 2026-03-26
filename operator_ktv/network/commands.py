@@ -229,6 +229,11 @@ except Exception as e:
         success, result, error = self.send_command('next_clip')
         return success, result or {}, error
 
+    def play_playlist_file(self, filename: str) -> Tuple[bool, Dict, str]:
+        """Play a specific file from the selected playlist immediately."""
+        success, result, error = self.send_command('play_playlist_file', {'filename': filename})
+        return success, result or {}, error
+
     def previous_clip(self) -> Tuple[bool, Dict, str]:
         """Go back to the previous clip."""
         success, result, error = self.send_command('previous_clip')

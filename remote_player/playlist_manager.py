@@ -400,6 +400,30 @@ class PlaylistManager:
         self.control_event.set()
         return True
 
+    def play_playlist_file(self, filename: str) -> bool:
+        """Play the requested file immediately, outside the normal queue order."""
+        target_name = Path(filename).name
+        with self.state_lock:
+            if self.system_paused or not self.current_files:
+                return False
+
+            target = next((index for index, path in enumerate(self.current_files) if path.name == target_name), None)
+            if target is None:
+                return False
+
+            self.pending_index_override = target
+            self.pending_index_from_history = False
+            self.user_paused = False
+            self._update_paused_flag_locked()
+            self.current_playlist_file = None
+            if self.shuffle_enabled and target in self.shuffle_pool:
+                self.shuffle_pool.remove(target)
+
+        if self.player.has_media():
+            self.player.stop()
+        self.control_event.set()
+        return True
+
     def play_previous(self) -> bool:
         """Return to the previous clip in playback history."""
         with self.state_lock:

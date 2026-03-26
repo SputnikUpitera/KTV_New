@@ -8,6 +8,7 @@ import logging
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -54,6 +55,7 @@ class ClipsTab(QWidget):
 
         left_layout = QVBoxLayout()
         left_layout.setSpacing(6)
+        left_layout.setContentsMargins(0, 0, 0, 0)
 
         self.section_label = QLabel("Плейлисты:")
         self.section_label.setObjectName("playlistSectionLabel")
@@ -67,6 +69,7 @@ class ClipsTab(QWidget):
         left_layout.addWidget(self.playlist_list, 1)
 
         playlist_btn_layout = QHBoxLayout()
+        playlist_btn_layout.setContentsMargins(0, 0, 0, 0)
         playlist_btn_layout.setSpacing(8)
 
         self.create_btn = QPushButton("Создать")
@@ -89,15 +92,7 @@ class ClipsTab(QWidget):
 
         right_layout = QVBoxLayout()
         right_layout.setSpacing(6)
-
-        self.selection_label = QLabel("Плейлист не выбран")
-        self.selection_label.setStyleSheet("font-size: 15px; font-weight: 600;")
-        self.selection_label.hide()
-
-        self.path_label = QLabel("Каталог: —")
-        self.path_label.setWordWrap(True)
-        self.path_label.setStyleSheet("color: #999999;")
-        self.path_label.hide()
+        right_layout.setContentsMargins(0, 0, 0, 0)
 
         self.drop_area = QFrame()
         self.drop_area.setAcceptDrops(True)
@@ -115,13 +110,39 @@ class ClipsTab(QWidget):
         self.drop_area.setMinimumHeight(72)
         self.drop_area.hide()
 
-        right_layout.addWidget(QLabel("Файлы выбранного плейлиста:"))
+        self.files_section_label = QLabel("Файлы выбранного плейлиста:")
+        self.files_section_label.setObjectName("playlistSectionLabel")
+        self.files_section_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        right_layout.addWidget(self.files_section_label)
+
         self.files_list = QListWidget()
         self.files_list.setAcceptDrops(True)
         self.files_list.dragEnterEvent = self.drag_enter_event
         self.files_list.dragMoveEvent = self.drag_move_event
         self.files_list.dropEvent = self.drop_event
+        self.files_list.itemSelectionChanged.connect(self._update_file_buttons)
         right_layout.addWidget(self.files_list, 1)
+
+        files_btn_layout = QHBoxLayout()
+        files_btn_layout.setContentsMargins(0, 0, 0, 0)
+        files_btn_layout.setSpacing(8)
+
+        self.add_file_btn = QPushButton("Добавить")
+        self.add_file_btn.setProperty("compact", True)
+        self.add_file_btn.clicked.connect(self.add_files_to_selected_playlist)
+        files_btn_layout.addWidget(self.add_file_btn)
+
+        self.play_file_btn = QPushButton("Вкл")
+        self.play_file_btn.setProperty("compact", True)
+        self.play_file_btn.clicked.connect(self.play_selected_file)
+        files_btn_layout.addWidget(self.play_file_btn)
+
+        self.delete_file_btn = QPushButton("Удалить")
+        self.delete_file_btn.setProperty("compact", True)
+        self.delete_file_btn.clicked.connect(self.delete_selected_file)
+        files_btn_layout.addWidget(self.delete_file_btn)
+
+        right_layout.addLayout(files_btn_layout)
 
         main_layout.addLayout(right_layout, 6)
         root_layout.addLayout(main_layout, 1)
@@ -132,6 +153,27 @@ class ClipsTab(QWidget):
         if not item:
             return None
         return item.data(Qt.ItemDataRole.UserRole)
+
+    def _selected_playlist_file(self):
+        item = self.files_list.currentItem()
+        if not item:
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def _set_files_placeholder(self, text: str):
+        self.files_list.clear()
+        item = QListWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+        self.files_list.addItem(item)
+        self._update_file_buttons()
+
+    def _update_file_buttons(self):
+        has_playlist = self._selected_playlist() is not None
+        has_file = self._selected_playlist_file() is not None
+        enabled = self.cmd_client is not None
+        self.add_file_btn.setEnabled(enabled and has_playlist)
+        self.play_file_btn.setEnabled(enabled and has_file)
+        self.delete_file_btn.setEnabled(enabled and has_file)
 
     def refresh_playlists(self):
         """Reload playlists from the remote system after daemon-side sync."""
@@ -189,8 +231,7 @@ class ClipsTab(QWidget):
         elif self.playlist_list.count():
             self.playlist_list.setCurrentRow(0)
         else:
-            self.files_list.clear()
-            self.files_list.addItem("Плейлист не выбран")
+            self._set_files_placeholder("Плейлист не выбран")
 
     def create_playlist(self):
         """Create a new playlist."""
@@ -278,22 +319,24 @@ class ClipsTab(QWidget):
         del previous
         playlist = current.data(Qt.ItemDataRole.UserRole) if current else None
         if not playlist:
-            self.files_list.clear()
-            self.files_list.addItem("Плейлист не выбран")
+            self._set_files_placeholder("Плейлист не выбран")
             return
 
         self.refresh_playlist_files(playlist)
 
     def refresh_playlist_files(self, playlist):
         """List files from the selected playlist directory."""
+        current_file = self._selected_playlist_file()
+        current_name = current_file['filename'] if current_file else None
         self.files_list.clear()
 
         if not self.ssh_client or not self.ssh_client.is_connected():
+            self._update_file_buttons()
             return
 
         success, files, error = self.ssh_client.list_directory(playlist.folder_path)
         if not success:
-            self.files_list.addItem(f"Не удалось прочитать каталог: {error}")
+            self._set_files_placeholder(f"Не удалось прочитать каталог: {error}")
             return
 
         visible_files = sorted(
@@ -301,11 +344,28 @@ class ClipsTab(QWidget):
             key=str.lower,
         )
         if not visible_files:
-            self.files_list.addItem("Файлы пока не добавлены")
+            self._set_files_placeholder("Файлы пока не добавлены")
             return
 
-        for filename in visible_files:
-            self.files_list.addItem(filename)
+        selected_row = -1
+        for index, filename in enumerate(visible_files):
+            item = QListWidgetItem(filename)
+            item.setData(
+                Qt.ItemDataRole.UserRole,
+                {
+                    'filename': filename,
+                    'filepath': f"{playlist.folder_path.rstrip('/')}/{filename}",
+                }
+            )
+            self.files_list.addItem(item)
+            if current_name and filename == current_name:
+                selected_row = index
+
+        if selected_row >= 0:
+            self.files_list.setCurrentRow(selected_row)
+        elif self.files_list.count():
+            self.files_list.setCurrentRow(0)
+        self._update_file_buttons()
 
     def drag_enter_event(self, event):
         """Handle drag enter event."""
@@ -371,6 +431,79 @@ class ClipsTab(QWidget):
             self.refresh_playlists()
             self.playlist_changed.emit()
 
+    def add_files_to_selected_playlist(self):
+        """Open a file dialog and upload files to the selected playlist."""
+        playlist = self._selected_playlist()
+        if not playlist:
+            QMessageBox.information(self, "Информация", "Выберите плейлист для добавления файлов")
+            return
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Добавить файлы в плейлист",
+            "",
+            "Видео (*.mp4 *.avi *.mkv *.webm *.mov *.flv *.wmv *.m4v);;Все файлы (*)",
+        )
+        if not files:
+            return
+
+        self.upload_files_to_playlist(files, playlist)
+
+    def play_selected_file(self):
+        """Activate and immediately play the selected playlist file."""
+        playlist = self._selected_playlist()
+        file_info = self._selected_playlist_file()
+        if not playlist or not file_info:
+            QMessageBox.information(self, "Информация", "Выберите файл плейлиста")
+            return
+
+        try:
+            if not playlist.active:
+                success, error = self.cmd_client.set_active_playlist(playlist.id)
+                if not success:
+                    QMessageBox.critical(self, "Ошибка", f"Не удалось активировать плейлист:\n{error}")
+                    return
+
+            success, _, error = self.cmd_client.play_playlist_file(file_info['filename'])
+            if not success:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось включить файл:\n{error}")
+                return
+
+            self.refresh_playlists()
+            self.playlist_changed.emit()
+        except Exception as exc:
+            logger.error("Error playing playlist file: %s", exc)
+            QMessageBox.critical(self, "Ошибка", f"Ошибка:\n{exc}")
+
+    def delete_selected_file(self):
+        """Delete the selected file from the playlist directory."""
+        playlist = self._selected_playlist()
+        file_info = self._selected_playlist_file()
+        if not playlist or not file_info:
+            QMessageBox.information(self, "Информация", "Выберите файл для удаления")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Подтверждение",
+            f"Удалить файл '{file_info['filename']}' из плейлиста '{playlist.name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            success, error = self.ssh_client.delete_file(file_info['filepath'])
+            if not success:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось удалить файл:\n{error}")
+                return
+
+            self.refresh_playlists()
+            self.playlist_changed.emit()
+        except Exception as exc:
+            logger.error("Error deleting playlist file: %s", exc)
+            QMessageBox.critical(self, "Ошибка", f"Ошибка:\n{exc}")
+
     def _get_remote_home(self) -> str:
         """Get the remote user's home directory."""
         if self.ssh_client and self.ssh_client.is_connected():
@@ -393,8 +526,8 @@ class ClipsTab(QWidget):
         self.create_btn.setEnabled(enabled)
         self.activate_btn.setEnabled(enabled)
         self.delete_btn.setEnabled(enabled)
+        self._update_file_buttons()
 
         if not enabled:
             self.playlist_list.clear()
-            self.files_list.clear()
-            self.files_list.addItem("Нет подключения")
+            self._set_files_placeholder("Нет подключения")

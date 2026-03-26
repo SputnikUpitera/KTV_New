@@ -140,6 +140,7 @@ class KTVDaemon:
         self.api_server.register_handler('toggle_play_pause', self._handle_toggle_play_pause)
         self.api_server.register_handler('stop_playback', self._handle_stop_playback)
         self.api_server.register_handler('next_clip', self._handle_next_clip)
+        self.api_server.register_handler('play_playlist_file', self._handle_play_playlist_file)
         self.api_server.register_handler('previous_clip', self._handle_previous_clip)
         self.api_server.register_handler('toggle_loop', self._handle_toggle_loop)
         self.api_server.register_handler('toggle_shuffle', self._handle_toggle_shuffle)
@@ -319,6 +320,17 @@ class KTVDaemon:
         success = playlist_manager.play_next()
         if not success:
             raise RuntimeError('Could not start the next clip')
+        return self._transport_response()
+
+    def _handle_play_playlist_file(self, params: Dict) -> Dict:
+        """Handle immediate playback of a specific playlist file."""
+        playlist_manager = self._require_clip_transport()
+        filename = params.get('filename')
+        if not filename:
+            raise ValueError('filename is required')
+        success = playlist_manager.play_playlist_file(filename)
+        if not success:
+            raise RuntimeError('Could not start the requested clip')
         return self._transport_response()
 
     def _handle_previous_clip(self, params: Dict) -> Dict:

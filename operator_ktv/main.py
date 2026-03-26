@@ -173,6 +173,8 @@ def setup_dark_theme(app):
             font-size: 18px;
             font-weight: 400;
             padding: 0 0 2px 2px;
+            min-height: 26px;
+            max-height: 26px;
         }
         QLabel#monthHeaderLabel {
             font-size: 11px;

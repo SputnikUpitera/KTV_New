@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from PyQt6.QtCore import QSize, Qt, QTimer
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QColor, QBrush, QIcon, QPainter, QPen, QPixmap
 import logging
 import sys
 from pathlib import Path
@@ -107,6 +107,8 @@ class MainWindow(QMainWindow):
         controls_layout.setContentsMargins(8, 6, 8, 6)
         controls_layout.setHorizontalSpacing(4)
         controls_layout.setVerticalSpacing(4)
+        self.shuffle_icon = self._build_dice_icon("#f0f0f0")
+        self.shuffle_icon_checked = self._build_dice_icon("#000000")
 
         self.play_pause_btn = self._create_transport_button(
             icon=self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause),
@@ -124,7 +126,7 @@ class MainWindow(QMainWindow):
             handler=self.next_clip,
         )
         self.shuffle_btn = self._create_transport_button(
-            text="Rnd",
+            icon=self.shuffle_icon,
             tooltip="Случайный порядок клипов",
             checkable=True,
             handler=self.toggle_shuffle,
@@ -324,7 +326,7 @@ class MainWindow(QMainWindow):
         button = QToolButton()
         button.setObjectName("transportButton")
         button.setCheckable(checkable)
-        button.setIconSize(QSize(14, 14))
+        button.setIconSize(QSize(18, 18))
         button.setToolTip(tooltip)
         if icon is not None:
             button.setIcon(icon)
@@ -334,6 +336,30 @@ class MainWindow(QMainWindow):
             button.clicked.connect(lambda _checked=False, callback=handler: callback())
         return button
 
+    def _build_dice_icon(self, color: str) -> QIcon:
+        """Create a dice icon for the random button."""
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(color), 1.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        painter.drawRoundedRect(2, 2, 7, 7, 1.6, 1.6)
+        painter.drawRoundedRect(9, 9, 7, 7, 1.6, 1.6)
+
+        pip_brush = QBrush(QColor(color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(pip_brush)
+
+        for x, y in ((4, 4), (6, 6), (11, 11), (11, 14), (14, 11), (14, 14)):
+            painter.drawEllipse(x, y, 2, 2)
+        painter.end()
+
+        return QIcon(pixmap)
+
     def _reset_transport_controls(self, reset_text: bool = True):
         """Disable transport controls and reset their state."""
         if reset_text:
@@ -341,6 +367,7 @@ class MainWindow(QMainWindow):
             self.next_clip_label.setText("Следующий клип: —")
             self.next_clip_label.setVisible(True)
         self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.shuffle_btn.setIcon(self.shuffle_icon)
         for button in (self.play_pause_btn, self.stop_btn, self.next_btn, self.shuffle_btn):
             button.setEnabled(False)
         self.shuffle_btn.setChecked(False)
@@ -433,6 +460,7 @@ class MainWindow(QMainWindow):
             self.next_clip_label.setText("Следующий клип: —")
 
         self.shuffle_btn.setChecked(shuffle_enabled)
+        self.shuffle_btn.setIcon(self.shuffle_icon_checked if shuffle_enabled else self.shuffle_icon)
         self.shuffle_btn.setEnabled(transport_available and has_playlist_files)
         self.next_btn.setEnabled(transport_available and has_playlist_files)
         self.stop_btn.setEnabled(transport_available and (has_active_clip or paused or source == 'clip'))
