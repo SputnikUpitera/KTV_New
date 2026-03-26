@@ -7,7 +7,7 @@ import sys
 import logging
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QPalette, QColor
+from PyQt6.QtGui import QFont, QPalette, QColor
 from PyQt6.QtCore import Qt
 
 # Add parent directory to path for imports
@@ -49,6 +49,7 @@ def setup_logging(debug=False):
 def setup_dark_theme(app):
     """Setup dark theme for the application"""
     app.setStyle('Fusion')
+    app.setFont(QFont("Helvetica", 10, QFont.Weight.Normal))
     
     dark_palette = QPalette()
     
@@ -85,11 +86,15 @@ def setup_dark_theme(app):
         QFrame#playbackStatusFrame {
             background-color: #25282d;
             border: 1px solid #373c44;
-            border-radius: 12px;
+            border-radius: 0px;
+        }
+        QFrame#playbackControlsFrame {
+            border-left: 1px solid #3b4048;
+            background-color: #20242a;
         }
         QSplitter::handle {
             background-color: #2f2f2f;
-            width: 6px;
+            width: 30px;
         }
         QTreeWidget, QListWidget {
             border: 1px solid #3a3a3a;
@@ -110,17 +115,81 @@ def setup_dark_theme(app):
             color: #000000;
         }
         QPushButton {
-            min-height: 32px;
-            padding: 4px 12px;
+            min-height: 30px;
+            padding: 4px 10px;
             border: 1px solid #4a4a4a;
             border-radius: 8px;
             background-color: #363636;
+        }
+        QPushButton[compact="true"] {
+            min-height: 24px;
+            padding: 2px 10px;
+            border-radius: 6px;
         }
         QPushButton:hover {
             background-color: #434343;
         }
         QPushButton:pressed {
             background-color: #2d2d2d;
+        }
+        QToolButton#transportButton, QToolButton#monthAddButton {
+            min-width: 28px;
+            min-height: 28px;
+            padding: 2px;
+            border: 1px solid #4a4a4a;
+            border-radius: 6px;
+            background-color: #2d3138;
+            color: #f0f0f0;
+            font-weight: 400;
+        }
+        QToolButton#transportButton:hover, QToolButton#monthAddButton:hover {
+            background-color: #3a4048;
+        }
+        QToolButton#transportButton:checked {
+            background-color: #2a82da;
+            color: #000000;
+        }
+        QToolButton#monthAddButton {
+            min-width: 14px;
+            min-height: 14px;
+            padding: 0px;
+            border: 0px;
+            border-radius: 0px;
+            background-color: transparent;
+            color: #d8d8d8;
+            font-size: 12px;
+            font-weight: 400;
+        }
+        QToolButton#monthAddButton:hover {
+            background-color: transparent;
+            color: #ffffff;
+        }
+        QLabel#sectionHeaderLabel {
+            font-size: 12px;
+            font-weight: 400;
+            padding: 0 0 2px 0;
+        }
+        QLabel#playlistSectionLabel {
+            font-size: 18px;
+            font-weight: 400;
+            padding: 0 0 2px 2px;
+        }
+        QLabel#monthHeaderLabel {
+            font-size: 11px;
+            font-weight: 400;
+        }
+        QLabel#playbackCaptionLabel {
+            color: #9a9a9a;
+            font-size: 9px;
+            letter-spacing: 0.4px;
+        }
+        QLabel#currentPlaybackLabel {
+            font-size: 15px;
+            font-weight: 700;
+        }
+        QLabel#nextClipLabel {
+            color: #8a8a8a;
+            font-size: 10px;
         }
         QPushButton:focus, QListWidget:focus, QTreeWidget:focus {
             border: 1px solid #63a4ff;

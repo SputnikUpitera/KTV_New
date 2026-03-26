@@ -8,11 +8,13 @@ import logging
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -30,6 +32,7 @@ class MoviesTab(QWidget):
     """Widget for managing movie schedules."""
 
     schedule_changed = pyqtSignal()
+    refresh_requested = pyqtSignal()
 
     MONTH_NAMES = [
         'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -43,6 +46,7 @@ class MoviesTab(QWidget):
         self.ssh_client = ssh_client
         self.cmd_client = cmd_client
         self.schedules = []
+        self.month_row_widgets = {}
 
         self.setup_ui()
         self.create_tree_structure()
@@ -51,18 +55,16 @@ class MoviesTab(QWidget):
     def setup_ui(self):
         """Setup the user interface."""
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 10, 0)
+        layout.setSpacing(10)
 
-        self.info_label = QLabel(
-            "Фильмы можно перетаскивать прямо на конкретный день. "
-            "При обновлении список синхронизируется с каталогами на Linux."
-        )
-        self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet("color: #aaaaaa; padding: 4px 0 8px 0;")
-        layout.addWidget(self.info_label)
+        self.section_label = QLabel("Фильмы:")
+        self.section_label.setObjectName("sectionHeaderLabel")
+        self.section_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.section_label)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabel("Расписание фильмов")
+        self.tree.setHeaderHidden(True)
         self.tree.setAcceptDrops(True)
         self.tree.setDragEnabled(False)
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
@@ -74,24 +76,29 @@ class MoviesTab(QWidget):
         layout.addWidget(self.tree, 1)
 
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(8)
 
         self.refresh_btn = QPushButton("Обновить")
-        self.refresh_btn.clicked.connect(self.refresh_schedules)
+        self.refresh_btn.setProperty("compact", True)
+        self.refresh_btn.clicked.connect(lambda _checked=False: self.refresh_requested.emit())
         button_layout.addWidget(self.refresh_btn)
 
         self.edit_btn = QPushButton("Изменить время")
+        self.edit_btn.setProperty("compact", True)
         self.edit_btn.clicked.connect(self.edit_selected_schedule)
         button_layout.addWidget(self.edit_btn)
 
         self.toggle_btn = QPushButton("Вкл/выкл")
+        self.toggle_btn.setProperty("compact", True)
         self.toggle_btn.clicked.connect(self.toggle_selected_schedule)
         button_layout.addWidget(self.toggle_btn)
 
-        button_layout.addStretch()
-
         self.delete_btn = QPushButton("Удалить")
+        self.delete_btn.setProperty("compact", True)
         self.delete_btn.clicked.connect(self.delete_selected)
         button_layout.addWidget(self.delete_btn)
+
+        button_layout.addStretch()
 
         layout.addLayout(button_layout)
         self.setLayout(layout)
@@ -99,25 +106,48 @@ class MoviesTab(QWidget):
     def create_tree_structure(self):
         """Create the month/day tree structure once and then update counts."""
         self.tree.clear()
+        self.month_row_widgets.clear()
 
-        for month_num, (month_name, days) in enumerate(zip(self.MONTH_NAMES, self.DAYS_IN_MONTH), 1):
-            month_item = QTreeWidgetItem(self.tree, [month_name])
+        for month_num, month_name in enumerate(self.MONTH_NAMES, 1):
+            month_item = QTreeWidgetItem(self.tree)
             month_item.setData(0, Qt.ItemDataRole.UserRole, {'type': 'month', 'month': month_num})
+            month_item.setExpanded(True)
 
-            for day in range(1, days + 1):
-                day_item = QTreeWidgetItem(month_item, [str(day)])
-                day_item.setData(0, Qt.ItemDataRole.UserRole, {
-                    'type': 'day',
-                    'month': month_num,
-                    'day': day,
-                })
+            row_widget = QWidget(self.tree)
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(4, 1, 4, 1)
+            row_layout.setSpacing(3)
+
+            title_label = QLabel(month_name)
+            title_label.setObjectName("monthHeaderLabel")
+            row_layout.addWidget(title_label)
+
+            add_btn = QToolButton(row_widget)
+            add_btn.setText("+")
+            add_btn.setObjectName("monthAddButton")
+            add_btn.clicked.connect(lambda _, month=month_num: self.add_movie_for_month(month))
+            row_layout.addWidget(add_btn)
+            row_layout.addStretch()
+
+            self.tree.setItemWidget(month_item, 0, row_widget)
+            self.month_row_widgets[month_num] = {
+                'label': title_label,
+                'button': add_btn,
+            }
 
     def _month_item(self, month: int) -> QTreeWidgetItem:
         return self.tree.invisibleRootItem().child(month - 1)
 
     def _day_item(self, month: int, day: int) -> QTreeWidgetItem:
         month_item = self._month_item(month)
-        return month_item.child(day - 1) if month_item else None
+        if not month_item:
+            return None
+        for index in range(month_item.childCount()):
+            child = month_item.child(index)
+            data = child.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get('type') == 'day' and data.get('day') == day:
+                return child
+        return None
 
     def _selected_schedule(self):
         item = self.tree.currentItem()
@@ -157,59 +187,52 @@ class MoviesTab(QWidget):
             QMessageBox.critical(self, "Ошибка", f"Ошибка обновления:\n{exc}")
 
     def update_tree_with_schedules(self):
-        """Render schedules and counters into the static month/day tree."""
+        """Render schedules and counters into the month tree."""
+        schedules_by_day = {}
+        month_counts = {month: 0 for month in range(1, 13)}
+
+        for schedule in sorted(self.schedules, key=lambda item: (item.month, item.day, item.hour, item.minute, item.filename.lower())):
+            schedules_by_day.setdefault((schedule.month, schedule.day), []).append(schedule)
+            month_counts[schedule.month] += 1
+
         for month_index, month_name in enumerate(self.MONTH_NAMES, start=1):
             month_item = self._month_item(month_index)
             month_item.takeChildren()
-            month_item.setText(0, f"{month_name} (0)")
+            self._set_month_label(month_index, f"{month_name} ({month_counts.get(month_index, 0)})")
 
-            for day in range(1, self.DAYS_IN_MONTH[month_index - 1] + 1):
-                day_item = QTreeWidgetItem(month_item, [f"{day:02d} (0)"])
+            used_days = sorted(day for (month, day) in schedules_by_day if month == month_index)
+            for day in used_days:
+                day_schedules = schedules_by_day[(month_index, day)]
+                day_item = QTreeWidgetItem(month_item, [f"{day:02d} ({len(day_schedules)})"])
                 day_item.setData(0, Qt.ItemDataRole.UserRole, {
                     'type': 'day',
                     'month': month_index,
                     'day': day,
                 })
 
-        month_counts = {month: 0 for month in range(1, 13)}
-        day_counts = {}
+                for schedule in day_schedules:
+                    label = f"{schedule.get_time_string()}  {schedule.filename}"
+                    schedule_item = QTreeWidgetItem(day_item, [label])
+                    schedule_item.setData(0, Qt.ItemDataRole.UserRole, {
+                        'type': 'schedule',
+                        'schedule': schedule,
+                    })
+                    schedule_item.setToolTip(0, schedule.filepath)
 
-        for schedule in self.schedules:
-            day_item = self._day_item(schedule.month, schedule.day)
-            if not day_item:
-                continue
+                    if schedule.enabled:
+                        schedule_item.setForeground(0, QBrush(QColor(120, 220, 150)))
+                    else:
+                        schedule_item.setForeground(0, QBrush(QColor(140, 140, 140)))
 
-            month_counts[schedule.month] += 1
-            day_counts[(schedule.month, schedule.day)] = day_counts.get((schedule.month, schedule.day), 0) + 1
+                day_item.setExpanded(True)
 
-            label = f"{schedule.get_time_string()}  {schedule.filename}"
-            schedule_item = QTreeWidgetItem(day_item, [label])
-            schedule_item.setData(0, Qt.ItemDataRole.UserRole, {
-                'type': 'schedule',
-                'schedule': schedule,
-            })
-            schedule_item.setToolTip(0, schedule.filepath)
+            month_item.setExpanded(bool(used_days))
 
-            if schedule.enabled:
-                schedule_item.setForeground(0, QBrush(QColor(120, 220, 150)))
-            else:
-                schedule_item.setForeground(0, QBrush(QColor(140, 140, 140)))
-
-        for month_index, month_name in enumerate(self.MONTH_NAMES, start=1):
-            month_item = self._month_item(month_index)
-            month_count = month_counts.get(month_index, 0)
-            month_item.setText(0, f"{month_name} ({month_count})")
-
-            used_days = 0
-            for day in range(1, self.DAYS_IN_MONTH[month_index - 1] + 1):
-                count = day_counts.get((month_index, day), 0)
-                day_item = self._day_item(month_index, day)
-                day_item.setText(0, f"{day:02d} ({count})")
-                day_item.setExpanded(count > 0)
-                if count > 0:
-                    used_days += 1
-
-            month_item.setExpanded(used_days > 0)
+    def _set_month_label(self, month: int, text: str):
+        """Update the visible label for a month row."""
+        widgets = self.month_row_widgets.get(month)
+        if widgets:
+            widgets['label'].setText(text)
 
     def drag_enter_event(self, event):
         """Handle drag enter event."""
@@ -231,8 +254,8 @@ class MoviesTab(QWidget):
             return
 
         data = item.data(0, Qt.ItemDataRole.UserRole)
-        if not data or data.get('type') != 'day':
-            QMessageBox.information(self, "Информация", "Перетащите файл на конкретный день")
+        if not data or data.get('type') not in {'day', 'month'}:
+            QMessageBox.information(self, "Информация", "Перетащите файл на месяц или день")
             return
 
         files = [url.toLocalFile() for url in event.mimeData().urls()]
@@ -242,16 +265,38 @@ class MoviesTab(QWidget):
             return
 
         for file_path in video_files:
-            self.add_file_to_schedule(file_path, data['month'], data['day'])
+            if data.get('type') == 'month':
+                self.add_file_to_schedule(file_path, data['month'])
+            else:
+                self.add_file_to_schedule(file_path, data['month'], data['day'])
 
         event.acceptProposedAction()
 
-    def add_file_to_schedule(self, file_path: str, month: int, day: int):
-        """Prompt for time and then upload a movie into the schedule."""
-        dialog = ScheduleDialog(Path(file_path).name, month, day, self)
+    def add_movie_for_month(self, month: int):
+        """Pick local movie files and add them to a selected day within the month."""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Выберите фильмы",
+            "",
+            "Видео (*.mp4 *.avi *.mkv *.webm *.mov *.flv *.wmv *.m4v);;Все файлы (*)",
+        )
+        for file_path in files:
+            self.add_file_to_schedule(file_path, month)
+
+    def add_file_to_schedule(self, file_path: str, month: int, day: int = None):
+        """Prompt for schedule slot and then upload a movie into the schedule."""
+        selected_day = day or 1
+        dialog = ScheduleDialog(
+            Path(file_path).name,
+            month,
+            selected_day,
+            self,
+            allow_day_selection=day is None,
+            days_in_month=self.DAYS_IN_MONTH[month - 1],
+        )
         if dialog.exec():
-            hour, minute = dialog.get_time()
-            self.upload_and_schedule(file_path, month, day, hour, minute)
+            chosen_day, hour, minute = dialog.get_schedule_slot()
+            self.upload_and_schedule(file_path, month, chosen_day, hour, minute)
 
     def _get_remote_home(self) -> str:
         """Get the remote user's home directory."""
@@ -436,3 +481,5 @@ class MoviesTab(QWidget):
         self.edit_btn.setEnabled(enabled)
         self.toggle_btn.setEnabled(enabled)
         self.delete_btn.setEnabled(enabled)
+        for widgets in self.month_row_widgets.values():
+            widgets['button'].setEnabled(enabled)

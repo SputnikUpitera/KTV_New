@@ -171,8 +171,8 @@ class Scheduler:
         # Fixed: scheduled playback must not inherit stale callbacks.
         self.player.set_playback_ended_callback(None)
 
-        # Stop playlist if it's playing
-        if self.playlist_manager and self.playlist_manager.is_playing():
+        # Pause the playlist regardless of its current transport state.
+        if self.playlist_manager:
             logger.info("Pausing playlist for scheduled playback")
             self.playlist_manager.pause()
 

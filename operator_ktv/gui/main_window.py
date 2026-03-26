@@ -5,6 +5,7 @@ Main window for Operator KTV application.
 from PyQt6.QtWidgets import (
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -12,10 +13,12 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QSplitter,
     QStatusBar,
+    QStyle,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QAction
 import logging
 import sys
@@ -48,6 +51,7 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.setup_menu()
 
+        self.movies_tab.refresh_requested.connect(self.refresh_all_views)
         self.movies_tab.schedule_changed.connect(self.refresh_playback_status)
         self.clips_tab.playlist_changed.connect(self.refresh_playback_status)
 
@@ -61,33 +65,76 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Setup the user interface"""
         self.setWindowTitle("OperatorKTV - Управление медиа")
-        self.resize(1100, 720)
-        self.setMinimumSize(900, 620)
+        self.resize(1220, 690)
+        self.setMinimumSize(1000, 620)
 
         central_widget = QWidget()
         central_layout = QVBoxLayout(central_widget)
-        central_layout.setContentsMargins(12, 12, 12, 12)
+        central_layout.setContentsMargins(14, 12, 14, 12)
         central_layout.setSpacing(12)
 
         status_frame = QFrame()
         status_frame.setObjectName("playbackStatusFrame")
-        status_layout = QVBoxLayout(status_frame)
-        status_layout.setContentsMargins(16, 14, 16, 14)
-        status_layout.setSpacing(6)
+        status_frame.setMaximumHeight(88)
+        status_layout = QHBoxLayout(status_frame)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(0)
+
+        status_info = QWidget()
+        info_layout = QVBoxLayout(status_info)
+        info_layout.setContentsMargins(12, 8, 10, 8)
+        info_layout.setSpacing(2)
 
         status_caption = QLabel("Сейчас воспроизводится")
-        status_caption.setStyleSheet("color: #9a9a9a; font-size: 11px; letter-spacing: 0.4px;")
-        status_layout.addWidget(status_caption)
+        status_caption.setObjectName("playbackCaptionLabel")
+        info_layout.addWidget(status_caption)
 
         self.current_playback_label = QLabel("Нет данных")
-        self.current_playback_label.setStyleSheet("font-size: 20px; font-weight: 600;")
+        self.current_playback_label.setObjectName("currentPlaybackLabel")
         self.current_playback_label.setWordWrap(True)
-        status_layout.addWidget(self.current_playback_label)
+        info_layout.addWidget(self.current_playback_label)
 
         self.next_clip_label = QLabel("Следующий клип: —")
-        self.next_clip_label.setStyleSheet("color: #8a8a8a; font-size: 13px;")
+        self.next_clip_label.setObjectName("nextClipLabel")
         self.next_clip_label.setWordWrap(True)
-        status_layout.addWidget(self.next_clip_label)
+        info_layout.addWidget(self.next_clip_label)
+
+        status_layout.addWidget(status_info, 1)
+
+        self.playback_controls_frame = QFrame()
+        self.playback_controls_frame.setObjectName("playbackControlsFrame")
+        controls_layout = QGridLayout(self.playback_controls_frame)
+        controls_layout.setContentsMargins(8, 6, 8, 6)
+        controls_layout.setHorizontalSpacing(4)
+        controls_layout.setVerticalSpacing(4)
+
+        self.play_pause_btn = self._create_transport_button(
+            icon=self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause),
+            tooltip="Пауза/воспроизведение",
+            handler=self.toggle_play_pause,
+        )
+        self.stop_btn = self._create_transport_button(
+            icon=self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop),
+            tooltip="Стоп",
+            handler=self.stop_playback,
+        )
+        self.next_btn = self._create_transport_button(
+            icon=self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward),
+            tooltip="Следующий клип",
+            handler=self.next_clip,
+        )
+        self.shuffle_btn = self._create_transport_button(
+            text="Rnd",
+            tooltip="Случайный порядок клипов",
+            checkable=True,
+            handler=self.toggle_shuffle,
+        )
+
+        controls_layout.addWidget(self.play_pause_btn, 0, 0)
+        controls_layout.addWidget(self.stop_btn, 0, 1)
+        controls_layout.addWidget(self.next_btn, 1, 0)
+        controls_layout.addWidget(self.shuffle_btn, 1, 1)
+        status_layout.addWidget(self.playback_controls_frame)
 
         central_layout.addWidget(status_frame)
 
@@ -100,7 +147,7 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.setStretchFactor(0, 6)
         splitter.setStretchFactor(1, 5)
-        splitter.setSizes([620, 480])
+        splitter.setSizes([640, 520])
         central_layout.addWidget(splitter, 1)
 
         self.setCentralWidget(central_widget)
@@ -109,6 +156,7 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.update_status("Не подключено")
+        self._reset_transport_controls()
     
     def setup_menu(self):
         """Setup the menu bar"""
@@ -232,9 +280,7 @@ class MainWindow(QMainWindow):
             self.clips_tab.set_clients(self.ssh_client, self.cmd_client)
             
             # Refresh data
-            self.movies_tab.refresh_schedules()
-            self.clips_tab.refresh_playlists()
-            self.refresh_playback_status()
+            self.refresh_all_views()
             self.status_timer.start()
             
             QMessageBox.information(self, "Успех", "Подключено к удалённой системе")
@@ -265,19 +311,79 @@ class MainWindow(QMainWindow):
         if self.ssh_client:
             self.ssh_client.disconnect()
 
-        self.current_playback_label.setText("Нет данных")
-        self.next_clip_label.setText("Следующий клип: —")
+        self._reset_transport_controls()
         self.update_status("Не подключено")
     
     def update_status(self, message: str):
         """Update status bar message"""
         self.status_bar.showMessage(message)
 
+    def _create_transport_button(self, icon=None, text: str = "", tooltip: str = "",
+                                 checkable: bool = False, handler=None) -> QToolButton:
+        """Create a transport button for the playback banner."""
+        button = QToolButton()
+        button.setObjectName("transportButton")
+        button.setCheckable(checkable)
+        button.setIconSize(QSize(14, 14))
+        button.setToolTip(tooltip)
+        if icon is not None:
+            button.setIcon(icon)
+        if text:
+            button.setText(text)
+        if handler:
+            button.clicked.connect(lambda _checked=False, callback=handler: callback())
+        return button
+
+    def _reset_transport_controls(self, reset_text: bool = True):
+        """Disable transport controls and reset their state."""
+        if reset_text:
+            self.current_playback_label.setText("Нет данных")
+            self.next_clip_label.setText("Следующий клип: —")
+            self.next_clip_label.setVisible(True)
+        self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        for button in (self.play_pause_btn, self.stop_btn, self.next_btn, self.shuffle_btn):
+            button.setEnabled(False)
+        self.shuffle_btn.setChecked(False)
+
+    def refresh_all_views(self):
+        """Refresh movies, playlists and playback status together."""
+        if self.movies_tab.cmd_client:
+            self.movies_tab.refresh_schedules()
+        if self.clips_tab.cmd_client:
+            self.clips_tab.refresh_playlists()
+        self.refresh_playback_status()
+
+    def _execute_transport_command(self, command_name: str, error_title: str):
+        """Call a daemon transport command and refresh the banner."""
+        if not self.cmd_client:
+            return
+
+        command = getattr(self.cmd_client, command_name)
+        success, _, error = command()
+        if not success:
+            QMessageBox.warning(self, error_title, error)
+        self.refresh_playback_status()
+
+    def toggle_play_pause(self):
+        """Toggle play or pause for the active clip playlist."""
+        self._execute_transport_command('toggle_play_pause', "Не удалось изменить состояние воспроизведения")
+
+    def stop_playback(self):
+        """Stop clip playback."""
+        self._execute_transport_command('stop_playback', "Не удалось остановить воспроизведение")
+
+    def next_clip(self):
+        """Start the next clip."""
+        self._execute_transport_command('next_clip', "Не удалось переключить на следующий клип")
+
+    def toggle_shuffle(self):
+        """Toggle random clip order."""
+        self._execute_transport_command('toggle_shuffle', "Не удалось изменить случайный режим")
+
     def refresh_playback_status(self):
         """Refresh the compact playback banner in the main window."""
         if not self.cmd_client:
-            self.current_playback_label.setText("Нет данных")
-            self.next_clip_label.setText("Следующий клип: —")
+            self._reset_transport_controls()
             return
 
         success, status, error = self.cmd_client.get_status()
@@ -285,6 +391,8 @@ class MainWindow(QMainWindow):
             logger.warning("Could not refresh playback status: %s", error)
             self.current_playback_label.setText("Статус недоступен")
             self.next_clip_label.setText("Следующий клип: —")
+            self.next_clip_label.setVisible(True)
+            self._reset_transport_controls(reset_text=False)
             return
 
         current = status.get('current_playback', {})
@@ -292,27 +400,48 @@ class MainWindow(QMainWindow):
         filename = current.get('filename')
         player_status = status.get('player', {})
         playlist_status = status.get('playlist', {})
+        transport_available = bool(playlist_status.get('transport_available'))
+        has_playlist_files = bool(playlist_status.get('has_files'))
+        has_active_clip = bool(playlist_status.get('has_active_clip'))
+        paused = bool(player_status.get('is_paused')) or bool(playlist_status.get('paused'))
+        shuffle_enabled = bool(playlist_status.get('shuffle_enabled'))
 
         if source == 'movie' and filename:
             self.current_playback_label.setText(f"Фильм: {filename}")
         elif source == 'clip' and filename:
             playlist_name = playlist_status.get('active') or "плейлист"
-            self.current_playback_label.setText(f"Клип: {filename}  [{playlist_name}]")
+            prefix = "Клип на паузе" if paused else "Клип"
+            self.current_playback_label.setText(f"{prefix}: {filename}  [{playlist_name}]")
         elif player_status.get('is_playing') and player_status.get('filename'):
             fallback_filename = player_status['filename']
-            if playlist_status.get('playing'):
+            if playlist_status.get('playing') or paused:
                 playlist_name = playlist_status.get('active') or "плейлист"
-                self.current_playback_label.setText(f"Клип: {fallback_filename}  [{playlist_name}]")
+                prefix = "Клип на паузе" if paused else "Клип"
+                self.current_playback_label.setText(f"{prefix}: {fallback_filename}  [{playlist_name}]")
             else:
                 self.current_playback_label.setText(f"Воспроизводится: {fallback_filename}")
         else:
             self.current_playback_label.setText("Сейчас ничего не воспроизводится")
 
         next_clip = status.get('next_clip', {}).get('filename') or playlist_status.get('next_filename')
-        if next_clip:
+        self.next_clip_label.setVisible(not shuffle_enabled)
+        if shuffle_enabled:
+            self.next_clip_label.clear()
+        elif next_clip:
             self.next_clip_label.setText(f"Следующий клип: {next_clip}")
         else:
             self.next_clip_label.setText("Следующий клип: —")
+
+        self.shuffle_btn.setChecked(shuffle_enabled)
+        self.shuffle_btn.setEnabled(transport_available and has_playlist_files)
+        self.next_btn.setEnabled(transport_available and has_playlist_files)
+        self.stop_btn.setEnabled(transport_available and (has_active_clip or paused or source == 'clip'))
+        can_use_play_pause = transport_available and has_playlist_files
+        self.play_pause_btn.setEnabled(can_use_play_pause)
+        play_icon = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_MediaPlay if paused or source != 'clip' else QStyle.StandardPixmap.SP_MediaPause
+        )
+        self.play_pause_btn.setIcon(play_icon)
     
     def show_terminal(self):
         """Show SSH terminal window"""

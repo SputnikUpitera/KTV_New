@@ -213,6 +213,36 @@ except Exception as e:
         """Get daemon status"""
         success, result, error = self.send_command('get_status')
         return success, result or {}, error
+
+    def toggle_play_pause(self) -> Tuple[bool, Dict, str]:
+        """Toggle play/pause for clip playback."""
+        success, result, error = self.send_command('toggle_play_pause')
+        return success, result or {}, error
+
+    def stop_playback(self) -> Tuple[bool, Dict, str]:
+        """Stop clip playback and leave it paused."""
+        success, result, error = self.send_command('stop_playback')
+        return success, result or {}, error
+
+    def next_clip(self) -> Tuple[bool, Dict, str]:
+        """Skip to the next clip."""
+        success, result, error = self.send_command('next_clip')
+        return success, result or {}, error
+
+    def previous_clip(self) -> Tuple[bool, Dict, str]:
+        """Go back to the previous clip."""
+        success, result, error = self.send_command('previous_clip')
+        return success, result or {}, error
+
+    def toggle_loop(self) -> Tuple[bool, Dict, str]:
+        """Toggle playlist loop mode."""
+        success, result, error = self.send_command('toggle_loop')
+        return success, result or {}, error
+
+    def toggle_shuffle(self) -> Tuple[bool, Dict, str]:
+        """Toggle random clip playback."""
+        success, result, error = self.send_command('toggle_shuffle')
+        return success, result or {}, error
     
     def ping(self) -> Tuple[bool, str]:
         """Ping the daemon"""

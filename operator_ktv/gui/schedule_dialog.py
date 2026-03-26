@@ -3,7 +3,7 @@ Schedule dialog for selecting playback time
 """
 
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-                             QTimeEdit, QPushButton, QWidget)
+                             QPushButton, QSpinBox, QTimeEdit, QWidget)
 from PyQt6.QtCore import QTime, Qt
 from pathlib import Path
 
@@ -14,7 +14,9 @@ class ScheduleDialog(QDialog):
     def __init__(self, filename: str, month: int, day: int, parent=None,
                  initial_hour: int = 12, initial_minute: int = 0,
                  dialog_title: str = "Выбор времени воспроизведения",
-                 action_text: str = "Подтвердить"):
+                 action_text: str = "Подтвердить",
+                 allow_day_selection: bool = False,
+                 days_in_month: int = 31):
         super().__init__(parent)
         
         self.filename = filename
@@ -25,6 +27,8 @@ class ScheduleDialog(QDialog):
         self.initial_minute = initial_minute
         self.dialog_title = dialog_title
         self.action_text = action_text
+        self.allow_day_selection = allow_day_selection
+        self.days_in_month = days_in_month
         
         self.setup_ui()
         
@@ -32,7 +36,7 @@ class ScheduleDialog(QDialog):
         """Setup the user interface"""
         self.setWindowTitle(self.dialog_title)
         self.setModal(True)
-        self.setFixedSize(400, 200)
+        self.setFixedSize(420, 240 if self.allow_day_selection else 200)
         
         layout = QVBoxLayout()
         
@@ -45,8 +49,20 @@ class ScheduleDialog(QDialog):
         months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
                  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
         month_name = months[self.month - 1] if 1 <= self.month <= 12 else f"Month {self.month}"
-        date_label = QLabel(f"Дата: {self.day} {month_name}")
-        layout.addWidget(date_label)
+        if self.allow_day_selection:
+            day_layout = QHBoxLayout()
+            day_label = QLabel(f"Дата: {month_name}")
+            day_layout.addWidget(day_label)
+
+            self.day_spin = QSpinBox()
+            self.day_spin.setRange(1, self.days_in_month)
+            self.day_spin.setValue(self.day)
+            day_layout.addWidget(self.day_spin)
+            day_layout.addStretch()
+            layout.addLayout(day_layout)
+        else:
+            date_label = QLabel(f"Дата: {self.day} {month_name}")
+            layout.addWidget(date_label)
         
         layout.addSpacing(20)
         
@@ -90,3 +106,9 @@ class ScheduleDialog(QDialog):
         """
         time = self.time_edit.time()
         return time.hour(), time.minute()
+
+    def get_schedule_slot(self) -> tuple:
+        """Get the selected day and time tuple."""
+        hour, minute = self.get_time()
+        day = self.day_spin.value() if self.allow_day_selection else self.day
+        return day, hour, minute

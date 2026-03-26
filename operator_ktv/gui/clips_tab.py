@@ -44,12 +44,21 @@ class ClipsTab(QWidget):
 
     def setup_ui(self):
         """Setup the user interface."""
+        root_layout = QVBoxLayout()
+        root_layout.setContentsMargins(10, 0, 0, 0)
+        root_layout.setSpacing(6)
+
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(12)
+        main_layout.setSpacing(28)
 
         left_layout = QVBoxLayout()
-        left_layout.addWidget(QLabel("Плейлисты:"))
+        left_layout.setSpacing(6)
+
+        self.section_label = QLabel("Плейлисты:")
+        self.section_label.setObjectName("playlistSectionLabel")
+        self.section_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        left_layout.addWidget(self.section_label)
 
         self.playlist_list = QListWidget()
         self.playlist_list.setMinimumWidth(240)
@@ -58,36 +67,37 @@ class ClipsTab(QWidget):
         left_layout.addWidget(self.playlist_list, 1)
 
         playlist_btn_layout = QHBoxLayout()
+        playlist_btn_layout.setSpacing(8)
 
         self.create_btn = QPushButton("Создать")
+        self.create_btn.setProperty("compact", True)
         self.create_btn.clicked.connect(self.create_playlist)
         playlist_btn_layout.addWidget(self.create_btn)
 
-        self.activate_btn = QPushButton("Активировать")
+        self.activate_btn = QPushButton("Вкл")
+        self.activate_btn.setProperty("compact", True)
         self.activate_btn.clicked.connect(self.activate_selected_playlist)
         playlist_btn_layout.addWidget(self.activate_btn)
 
         self.delete_btn = QPushButton("Удалить")
+        self.delete_btn.setProperty("compact", True)
         self.delete_btn.clicked.connect(self.delete_playlist)
         playlist_btn_layout.addWidget(self.delete_btn)
-
-        self.refresh_btn = QPushButton("Обновить")
-        self.refresh_btn.clicked.connect(self.refresh_playlists)
-        playlist_btn_layout.addWidget(self.refresh_btn)
 
         left_layout.addLayout(playlist_btn_layout)
         main_layout.addLayout(left_layout, 4)
 
         right_layout = QVBoxLayout()
+        right_layout.setSpacing(6)
 
         self.selection_label = QLabel("Плейлист не выбран")
         self.selection_label.setStyleSheet("font-size: 15px; font-weight: 600;")
-        right_layout.addWidget(self.selection_label)
+        self.selection_label.hide()
 
         self.path_label = QLabel("Каталог: —")
         self.path_label.setWordWrap(True)
         self.path_label.setStyleSheet("color: #999999;")
-        right_layout.addWidget(self.path_label)
+        self.path_label.hide()
 
         self.drop_area = QFrame()
         self.drop_area.setAcceptDrops(True)
@@ -97,32 +107,25 @@ class ClipsTab(QWidget):
         self.drop_area.setStyleSheet("""
             QFrame {
                 border: 1px dashed #666;
-                border-radius: 10px;
                 background-color: #2b2b2b;
             }
         """)
         drop_layout = QVBoxLayout(self.drop_area)
-        drop_layout.setContentsMargins(14, 12, 14, 12)
-
-        drop_title = QLabel("Добавление файлов")
-        drop_title.setStyleSheet("font-weight: 600;")
-        drop_layout.addWidget(drop_title)
-
-        drop_hint = QLabel(
-            "Перетащите видеофайлы сюда. Файлы будут загружены в выбранный плейлист "
-            "в каталоге ~/oktv/clips."
-        )
-        drop_hint.setWordWrap(True)
-        drop_hint.setStyleSheet("color: #aaaaaa;")
-        drop_layout.addWidget(drop_hint)
-        right_layout.addWidget(self.drop_area)
+        drop_layout.setContentsMargins(0, 0, 0, 0)
+        self.drop_area.setMinimumHeight(72)
+        self.drop_area.hide()
 
         right_layout.addWidget(QLabel("Файлы выбранного плейлиста:"))
         self.files_list = QListWidget()
+        self.files_list.setAcceptDrops(True)
+        self.files_list.dragEnterEvent = self.drag_enter_event
+        self.files_list.dragMoveEvent = self.drag_move_event
+        self.files_list.dropEvent = self.drop_event
         right_layout.addWidget(self.files_list, 1)
 
         main_layout.addLayout(right_layout, 6)
-        self.setLayout(main_layout)
+        root_layout.addLayout(main_layout, 1)
+        self.setLayout(root_layout)
 
     def _selected_playlist(self):
         item = self.playlist_list.currentItem()
@@ -187,8 +190,7 @@ class ClipsTab(QWidget):
             self.playlist_list.setCurrentRow(0)
         else:
             self.files_list.clear()
-            self.selection_label.setText("Плейлист не выбран")
-            self.path_label.setText("Каталог: —")
+            self.files_list.addItem("Плейлист не выбран")
 
     def create_playlist(self):
         """Create a new playlist."""
@@ -277,15 +279,9 @@ class ClipsTab(QWidget):
         playlist = current.data(Qt.ItemDataRole.UserRole) if current else None
         if not playlist:
             self.files_list.clear()
-            self.selection_label.setText("Плейлист не выбран")
-            self.path_label.setText("Каталог: —")
+            self.files_list.addItem("Плейлист не выбран")
             return
 
-        title = playlist.name
-        if playlist.active:
-            title += "  [активный]"
-        self.selection_label.setText(title)
-        self.path_label.setText(f"Каталог: {playlist.folder_path}")
         self.refresh_playlist_files(playlist)
 
     def refresh_playlist_files(self, playlist):
@@ -394,14 +390,11 @@ class ClipsTab(QWidget):
         enabled = client is not None
         self.playlist_list.setEnabled(enabled)
         self.files_list.setEnabled(enabled)
-        self.drop_area.setEnabled(enabled)
         self.create_btn.setEnabled(enabled)
         self.activate_btn.setEnabled(enabled)
         self.delete_btn.setEnabled(enabled)
-        self.refresh_btn.setEnabled(enabled)
 
         if not enabled:
             self.playlist_list.clear()
             self.files_list.clear()
-            self.selection_label.setText("Плейлист не выбран")
-            self.path_label.setText("Каталог: —")
+            self.files_list.addItem("Нет подключения")

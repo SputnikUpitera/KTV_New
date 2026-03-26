@@ -135,6 +135,14 @@ class KTVDaemon:
         self.api_server.register_handler('set_active_playlist', self._handle_set_active_playlist)
         self.api_server.register_handler('list_playlists', self._handle_list_playlists)
         self.api_server.register_handler('sync_playlists', self._handle_sync_playlists)
+
+        # Playback transport commands
+        self.api_server.register_handler('toggle_play_pause', self._handle_toggle_play_pause)
+        self.api_server.register_handler('stop_playback', self._handle_stop_playback)
+        self.api_server.register_handler('next_clip', self._handle_next_clip)
+        self.api_server.register_handler('previous_clip', self._handle_previous_clip)
+        self.api_server.register_handler('toggle_loop', self._handle_toggle_loop)
+        self.api_server.register_handler('toggle_shuffle', self._handle_toggle_shuffle)
         
         # Status commands
         self.api_server.register_handler('get_status', self._handle_get_status)
@@ -288,6 +296,50 @@ class KTVDaemon:
         result = self.sync_playlists()
         self._reload_playlist_state()
         return result
+
+    def _handle_toggle_play_pause(self, params: Dict) -> Dict:
+        """Handle play/pause toggle for clip playback."""
+        playlist_manager = self._require_clip_transport()
+        success = playlist_manager.toggle_play_pause()
+        if not success:
+            raise RuntimeError('Could not toggle clip playback')
+        return self._transport_response()
+
+    def _handle_stop_playback(self, params: Dict) -> Dict:
+        """Handle stop for clip playback."""
+        playlist_manager = self._require_clip_transport()
+        success = playlist_manager.stop_playback()
+        if not success:
+            raise RuntimeError('Could not stop clip playback')
+        return self._transport_response()
+
+    def _handle_next_clip(self, params: Dict) -> Dict:
+        """Handle skipping to the next clip."""
+        playlist_manager = self._require_clip_transport()
+        success = playlist_manager.play_next()
+        if not success:
+            raise RuntimeError('Could not start the next clip')
+        return self._transport_response()
+
+    def _handle_previous_clip(self, params: Dict) -> Dict:
+        """Handle going back to the previous clip."""
+        playlist_manager = self._require_clip_transport()
+        success = playlist_manager.play_previous()
+        if not success:
+            raise RuntimeError('Could not start the previous clip')
+        return self._transport_response()
+
+    def _handle_toggle_loop(self, params: Dict) -> Dict:
+        """Handle loop mode toggle."""
+        playlist_manager = self._require_playlist_manager()
+        enabled = playlist_manager.toggle_loop()
+        return {'loop_enabled': enabled, **self._transport_response()}
+
+    def _handle_toggle_shuffle(self, params: Dict) -> Dict:
+        """Handle shuffle mode toggle."""
+        playlist_manager = self._require_playlist_manager()
+        enabled = playlist_manager.toggle_shuffle()
+        return {'shuffle_enabled': enabled, **self._transport_response()}
     
     def _handle_get_status(self, params: Dict) -> Dict:
         """Handle get_status command"""
@@ -309,6 +361,7 @@ class KTVDaemon:
         current_scheduled = self.scheduler.get_current_scheduled_playback() if self.scheduler else None
 
         if self.playlist_manager:
+            transport_status = self.playlist_manager.get_transport_status()
             status['playlist'] = {
                 'active': self.playlist_manager.get_active_playlist_name(),
                 'playing': self.playlist_manager.is_playing(),
@@ -316,6 +369,15 @@ class KTVDaemon:
                 'current_filename': self.playlist_manager.get_current_filename(),
                 'next_file': self.playlist_manager.get_next_file(),
                 'next_filename': self.playlist_manager.get_next_filename(),
+                'paused': transport_status['paused'],
+                'user_paused': transport_status['user_paused'],
+                'system_paused': transport_status['system_paused'],
+                'shuffle_enabled': transport_status['shuffle_enabled'],
+                'loop_enabled': transport_status['loop_enabled'],
+                'has_files': transport_status['has_files'],
+                'can_previous': transport_status['can_previous'],
+                'has_active_clip': transport_status['has_active_clip'],
+                'transport_available': current_scheduled is None and transport_status['has_files'],
             }
 
         if current_scheduled:
@@ -324,7 +386,7 @@ class KTVDaemon:
                 'filename': current_scheduled['filename'],
                 'filepath': current_scheduled['filepath'],
             }
-        elif self.playlist_manager and self.playlist_manager.is_playing():
+        elif self.playlist_manager and self.playlist_manager.get_current_filename():
             status['current_playback'] = {
                 'source': 'clip',
                 'filename': self.playlist_manager.get_current_filename(),
@@ -337,9 +399,17 @@ class KTVDaemon:
                 'filepath': None,
             }
 
+        next_clip_filename = None
+        next_clip_file = None
+        if self.playlist_manager:
+            playlist_status = self.playlist_manager.get_transport_status()
+            if not playlist_status['shuffle_enabled']:
+                next_clip_filename = self.playlist_manager.get_next_filename()
+                next_clip_file = self.playlist_manager.get_next_file()
+
         status['next_clip'] = {
-            'filename': self.playlist_manager.get_next_filename() if self.playlist_manager else None,
-            'filepath': self.playlist_manager.get_next_file() if self.playlist_manager else None,
+            'filename': next_clip_filename,
+            'filepath': next_clip_file,
         }
         
         return status
@@ -428,6 +498,27 @@ class KTVDaemon:
         """Reload playlist state after playlist changes."""
         if self.playlist_manager:
             self.playlist_manager.reload_active_playlist()
+
+    def _require_playlist_manager(self) -> PlaylistManager:
+        """Ensure playlist manager is available."""
+        if not self.playlist_manager:
+            raise RuntimeError('Playlist manager is not available')
+        return self.playlist_manager
+
+    def _require_clip_transport(self) -> PlaylistManager:
+        """Ensure clip transport controls may be used now."""
+        if self.scheduler and self.scheduler.get_current_scheduled_playback():
+            raise RuntimeError('Clip transport is unavailable while a scheduled movie is playing')
+        return self._require_playlist_manager()
+
+    def _transport_response(self) -> Dict:
+        """Return the latest transport-related status."""
+        status = self._handle_get_status({})
+        return {
+            'playlist': status.get('playlist', {}),
+            'current_playback': status.get('current_playback', {}),
+            'next_clip': status.get('next_clip', {}),
+        }
 
     def _build_schedule_target_path(self, month: int, day: int, hour: int, minute: int,
                                     filename: str) -> Path:

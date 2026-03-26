@@ -1,32 +1,37 @@
 """
-Media player wrapper for VLC
-Handles video playback with process management
+Media player wrapper built on top of libVLC.
 """
 
-import subprocess
 import logging
+import os
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Callable
-import signal
-import os
+from typing import Callable, Optional
+
+import vlc
 
 logger = logging.getLogger(__name__)
 
 
 class Player:
-    """VLC media player wrapper"""
+    """VLC media player wrapper using libVLC/python-vlc."""
     
     def __init__(self, vlc_path: str = '/usr/bin/vlc', display: str = ':0'):
         self.vlc_path = vlc_path
-        self.display = display  # X11 display for VLC
-        self.current_process: Optional[subprocess.Popen] = None
+        self.display = display
+        self.instance: Optional[vlc.Instance] = None
+        self.media_player: Optional[vlc.MediaPlayer] = None
+        self.current_media = None
         self.current_file: Optional[str] = None
         self.is_playing = False
+        self.is_paused = False
         self.monitor_thread: Optional[threading.Thread] = None
         self.playback_ended_callback: Optional[Callable] = None
         self.callback_lock = threading.Lock()
+        self.state_lock = threading.Lock()
+        self.playback_generation = 0
+        self.stop_requested_generation: Optional[int] = None
     
     def set_playback_ended_callback(self, callback: Optional[Callable[[str], None]] = None):
         """Set callback to be called when playback ends"""
@@ -54,134 +59,216 @@ class Player:
             logger.error(f"File not found: {filepath}")
             return False
         
-        # Build VLC command
-        cmd = [
-            self.vlc_path,
-            '--play-and-exit',      # Exit after playback
-            '--no-video-title-show', # Don't show filename overlay
-            '--quiet',               # Minimal output
-        ]
-        
-        if fullscreen:
-            cmd.append('--fullscreen')  # Fullscreen
-        
-        # Additional options for reliable playback
-        cmd.extend([
-            '--no-osd',              # No on-screen display
-            '--no-playlist-enqueue', # Don't enqueue in playlist
-            '--one-instance',        # Use single instance
-        ])
-        
-        cmd.append(filepath)
-        
-        # Set up environment with DISPLAY
-        env = os.environ.copy()
-        env['DISPLAY'] = self.display
-        
         try:
-            logger.info(f"Starting VLC playback: {filepath}")
-            
-            # Start VLC process with DISPLAY set
-            self.current_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                env=env
-            )
-            
-            self.current_file = filepath
-            self.is_playing = True
-            
-            # Start monitoring thread
+            logger.info("Starting VLC playback: %s", filepath)
+            self._ensure_player()
+            media = self.instance.media_new(str(filepath))
+
+            with self.state_lock:
+                self.playback_generation += 1
+                generation = self.playback_generation
+                self.stop_requested_generation = None
+                self.current_media = media
+                self.current_file = filepath
+                self.is_playing = False
+                self.is_paused = False
+
+            self.media_player.set_media(media)
+            result = self.media_player.play()
+            if result == -1:
+                logger.error("libVLC rejected playback start for %s", filepath)
+                self._finalize_playback(generation, invoke_callback=False)
+                return False
+
+            time.sleep(0.25)
+            state = self.media_player.get_state()
+            if state == vlc.State.Error:
+                logger.error("libVLC entered error state during startup for %s", filepath)
+                self._finalize_playback(generation, invoke_callback=False)
+                return False
+
+            if fullscreen:
+                try:
+                    self.media_player.set_fullscreen(True)
+                except Exception as exc:
+                    logger.debug("Could not enable fullscreen for %s: %s", filepath, exc)
+
+            with self.state_lock:
+                if generation == self.playback_generation and self.current_file == filepath:
+                    self.is_paused = state == vlc.State.Paused
+                    self.is_playing = not self.is_paused
+
             self.monitor_thread = threading.Thread(
                 target=self._monitor_playback,
+                args=(generation, filepath),
                 daemon=True
             )
             self.monitor_thread.start()
-            
-            logger.info(f"Playback started: {Path(filepath).name}")
+
+            logger.info("Playback started via libVLC: %s", Path(filepath).name)
             return True
-            
+
         except Exception as e:
-            logger.error(f"Failed to start playback: {e}")
-            self.is_playing = False
-            self.current_file = None
+            logger.error("Failed to start playback: %s", e, exc_info=True)
+            self._clear_state()
             return False
     
     def stop(self) -> bool:
         """Stop current playback"""
-        if not self.is_playing or not self.current_process:
+        if not self.has_media():
             return False
         
         try:
             logger.info("Stopping playback")
-            
-            # Try graceful termination first
-            self.current_process.terminate()
-            
-            # Wait up to 2 seconds for process to end
-            try:
-                self.current_process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                # Force kill if it doesn't terminate
-                logger.warning("Force killing VLC process")
-                self.current_process.kill()
-                self.current_process.wait()
-            
-            self.is_playing = False
-            stopped_file = self.current_file
-            self.current_file = None
-            self.current_process = None
-            
-            logger.info(f"Playback stopped: {Path(stopped_file).name if stopped_file else 'unknown'}")
+            with self.state_lock:
+                generation = self.playback_generation
+                stopped_file = self.current_file
+                self.stop_requested_generation = generation
+
+            if self.media_player:
+                self.media_player.stop()
+
+            self._finalize_playback(generation, invoke_callback=False)
+            logger.info("Playback stopped: %s", Path(stopped_file).name if stopped_file else 'unknown')
             return True
             
         except Exception as e:
-            logger.error(f"Error stopping playback: {e}")
+            logger.error("Error stopping playback: %s", e, exc_info=True)
             return False
     
-    def _monitor_playback(self):
-        """Monitor playback process and detect when it ends"""
-        if not self.current_process:
-            return
-        
-        filepath = self.current_file
-        
-        # Wait for process to end
-        return_code = self.current_process.wait()
-        
-        # Update state
-        self.is_playing = False
-        self.current_file = None
-        self.current_process = None
-        
-        if return_code == 0:
-            logger.info(f"Playback finished normally: {Path(filepath).name if filepath else 'unknown'}")
-        else:
-            logger.warning(f"Playback ended with code {return_code}: {Path(filepath).name if filepath else 'unknown'}")
-        
-        # Call callback if set
-        with self.callback_lock:
-            callback = self.playback_ended_callback
+    def _monitor_playback(self, generation: int, filepath: str):
+        """Monitor libVLC state changes until playback completes."""
+        while True:
+            with self.state_lock:
+                if generation != self.playback_generation or self.current_file != filepath:
+                    return
+                active = self.current_file is not None
+            if not active or not self.media_player:
+                return
 
-        if callback and filepath:
             try:
-                callback(filepath)
-            except Exception as e:
-                logger.error(f"Error in playback ended callback: {e}")
+                state = self.media_player.get_state()
+            except Exception as exc:
+                logger.error("Could not query VLC state for %s: %s", filepath, exc)
+                self._finalize_playback(generation, invoke_callback=True)
+                return
+
+            if state == vlc.State.Ended:
+                logger.info("Playback finished normally: %s", Path(filepath).name)
+                self._finalize_playback(generation, invoke_callback=True)
+                return
+            if state == vlc.State.Error:
+                logger.error("Playback failed during runtime: %s", Path(filepath).name)
+                self._finalize_playback(generation, invoke_callback=True)
+                return
+            if state == vlc.State.Stopped:
+                with self.state_lock:
+                    invoke_callback = self.stop_requested_generation != generation
+                self._finalize_playback(generation, invoke_callback=invoke_callback)
+                return
+
+            with self.state_lock:
+                if generation == self.playback_generation:
+                    self.is_paused = state == vlc.State.Paused
+                    self.is_playing = state not in (
+                        vlc.State.NothingSpecial,
+                        vlc.State.Stopped,
+                        vlc.State.Ended,
+                        vlc.State.Error,
+                    ) and not self.is_paused
+
+            time.sleep(0.2)
     
     def get_status(self) -> dict:
         """Get current player status"""
         return {
             'is_playing': self.is_playing,
+            'is_paused': self.is_paused,
+            'can_pause': self.has_media(),
             'current_file': self.current_file,
             'filename': Path(self.current_file).name if self.current_file else None
         }
     
     def is_busy(self) -> bool:
         """Check if player is currently playing"""
-        return self.is_playing
+        return self.has_media()
+
+    def has_media(self) -> bool:
+        """Check whether a media item is currently loaded."""
+        with self.state_lock:
+            return self.current_file is not None
+
+    def pause(self) -> bool:
+        """Pause the current playback without losing position."""
+        with self.state_lock:
+            if not self.current_file or self.is_paused:
+                return False
+        if not self.media_player:
+            return False
+        self.media_player.set_pause(1)
+        with self.state_lock:
+            self.is_paused = True
+            self.is_playing = False
+        logger.info("Playback paused")
+        return True
+
+    def resume(self) -> bool:
+        """Resume the current playback from the paused position."""
+        with self.state_lock:
+            if not self.current_file or not self.is_paused:
+                return False
+        if not self.media_player:
+            return False
+        self.media_player.set_pause(0)
+        with self.state_lock:
+            self.is_paused = False
+            self.is_playing = True
+        logger.info("Playback resumed")
+        return True
+
+    def _ensure_player(self):
+        """Create libVLC objects lazily."""
+        if self.instance and self.media_player:
+            return
+
+        os.environ['DISPLAY'] = self.display
+        self.instance = vlc.Instance(
+            '--quiet',
+            '--no-video-title-show',
+            '--no-osd',
+            '--no-playlist-enqueue',
+        )
+        self.media_player = self.instance.media_player_new()
+
+    def _finalize_playback(self, generation: int, invoke_callback: bool):
+        """Clear state for a finished playback session."""
+        with self.state_lock:
+            if generation != self.playback_generation:
+                return
+            filepath = self.current_file
+            self.current_file = None
+            self.current_media = None
+            self.is_playing = False
+            self.is_paused = False
+            self.stop_requested_generation = None
+
+        if invoke_callback and filepath:
+            with self.callback_lock:
+                callback = self.playback_ended_callback
+            if callback:
+                try:
+                    callback(filepath)
+                except Exception as exc:
+                    logger.error("Error in playback ended callback: %s", exc, exc_info=True)
+
+    def _clear_state(self):
+        """Reset in-memory playback state."""
+        with self.state_lock:
+            self.current_file = None
+            self.current_media = None
+            self.is_playing = False
+            self.is_paused = False
+            self.stop_requested_generation = None
 
 
 # Test functionality
