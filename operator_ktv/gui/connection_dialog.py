@@ -141,7 +141,6 @@ class ConnectionDialog(QDialog):
         self.ip_edit.setText(self.settings.value("connection/host", "", str))
         self.port_spin.setValue(self.settings.value("connection/port", 22, int))
         self.user_edit.setText(self.settings.value("connection/username", "", str))
-
         remember_password = self.settings.value("connection/remember_password", False, bool)
         self.remember_password_check.setChecked(remember_password)
         if remember_password:

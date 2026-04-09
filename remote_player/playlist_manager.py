@@ -204,7 +204,7 @@ class PlaylistManager:
                     continue
 
                 if self.player.has_media():
-                    self.control_event.wait(0.2)
+                    self.control_event.wait(1.0)
                     self.control_event.clear()
                     continue
 
@@ -224,7 +224,7 @@ class PlaylistManager:
                     self.control_event.clear()
                     continue
 
-                self.control_event.wait(0.2)
+                self.control_event.wait(0.5)
                 self.control_event.clear()
 
             except Exception as exc:

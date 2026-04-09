@@ -176,10 +176,15 @@ After=network.target
 Type=simple
 User=__DAEMON_USER__
 Group=ktv
+SupplementaryGroups=audio video render input
+Environment=DISPLAY=:0
+Environment=HOME=__DAEMON_HOME__
 WorkingDirectory=/opt/ktv
 ExecStart=/usr/bin/python3 /opt/ktv/daemon.py
 Restart=always
 RestartSec=10
+TimeoutStopSec=5
+KillMode=mixed
 StandardOutput=append:/var/log/ktv/daemon.log
 StandardError=append:/var/log/ktv/daemon.log
 
@@ -203,7 +208,14 @@ WantedBy=multi-user.target
     "broadcast_start": "06:00",
     "broadcast_end": "22:00",
     "vlc_path": "/usr/bin/vlc",
-    "display": ":0"
+    "display": ":0",
+    "vlc_avcodec_hw": "none",
+    "vlc_video_output": "xcb_x11",
+    "vlc_avcodec_threads": 2,
+    "vlc_file_caching_ms": 1000,
+    "vlc_network_caching_ms": 1500,
+    "vlc_enable_frame_skip": true,
+    "vlc_extra_args": []
 }
 """
         config_file = self.build_dir / 'config' / 'config.json'
@@ -284,6 +296,14 @@ ORIGINAL_USER="${SUDO_USER:-$USER}"
 if [ "$ORIGINAL_USER" != "root" ]; then
     usermod -aG ktv "$ORIGINAL_USER"
     echo "✓ User '$ORIGINAL_USER' added to 'ktv' group"
+    
+    # Add playback-related groups when they exist, so VLC can use GPU/audio devices.
+    for grp in audio video render input; do
+        if getent group "$grp" >/dev/null 2>&1; then
+            usermod -aG "$grp" "$ORIGINAL_USER"
+            echo "✓ User '$ORIGINAL_USER' added to '$grp' group"
+        fi
+    done
 fi
 
 # Create directories
@@ -378,8 +398,9 @@ if [ -f "systemd/ktv-daemon.service" ]; then
     # Stop old daemon if running
     systemctl stop ktv-daemon.service 2>/dev/null || true
     
-    # Replace placeholder with the actual user who will run the daemon
-    sed "s/__DAEMON_USER__/$ORIGINAL_USER/" systemd/ktv-daemon.service > /etc/systemd/system/ktv-daemon.service
+    # Replace placeholders with the actual user and home directory for the daemon.
+    USER_HOME=$(eval echo "~$ORIGINAL_USER")
+    sed -e "s/__DAEMON_USER__/$ORIGINAL_USER/" -e "s|__DAEMON_HOME__|$USER_HOME|" systemd/ktv-daemon.service > /etc/systemd/system/ktv-daemon.service
     echo "✓ Service configured to run as user '$ORIGINAL_USER'"
     
     systemctl daemon-reload

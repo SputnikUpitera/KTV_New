@@ -2,4 +2,3 @@ APScheduler==3.10.4
 pytz==2023.3
 tzlocal==2.1
 six==1.16.0
-python-vlc==3.0.21203

@@ -5,7 +5,6 @@ Remote command protocol for communicating with KTV daemon
 import json
 import socket
 import logging
-import base64
 from typing import Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
@@ -23,6 +22,84 @@ class CommandClient:
         """
         self.ssh_client = ssh_client
         self.daemon_port = 8888
+
+    def _send_via_ssh_tunnel(self, request_json: str) -> Dict[str, Any]:
+        """Send a command through an SSH direct-tcpip channel to the daemon."""
+        transport = self.ssh_client.client.get_transport() if self.ssh_client.client else None
+        if not transport or not transport.is_active():
+            raise RuntimeError("SSH transport is not active")
+
+        channel = transport.open_channel(
+            'direct-tcpip',
+            ('127.0.0.1', self.daemon_port),
+            ('127.0.0.1', 0),
+        )
+        try:
+            channel.settimeout(10.0)
+            channel.sendall(request_json.encode('utf-8'))
+            channel.shutdown_write()
+
+            data = bytearray()
+            while True:
+                chunk = channel.recv(4096)
+                if not chunk:
+                    break
+                data.extend(chunk)
+                try:
+                    return json.loads(data.decode('utf-8'))
+                except json.JSONDecodeError:
+                    continue
+
+            if not data:
+                raise RuntimeError("Empty response from daemon")
+            return json.loads(data.decode('utf-8'))
+        finally:
+            try:
+                channel.close()
+            except Exception:
+                pass
+
+    def _send_via_remote_python(self, request_json: str) -> Dict[str, Any]:
+        """Fallback path using a short remote Python bridge."""
+        request_literal = repr(request_json)
+        python_cmd = f'''python3 -c "
+import socket
+import json
+import sys
+
+try:
+    request_json = {request_literal}
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(10)
+    sock.connect(('localhost', {self.daemon_port}))
+
+    sock.sendall(request_json.encode('utf-8'))
+
+    data = b''
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        try:
+            json.loads(data.decode('utf-8'))
+            break
+        except Exception:
+            continue
+
+    sock.close()
+    print(data.decode('utf-8'))
+    sys.exit(0)
+except Exception as e:
+    print(json.dumps({{'success': False, 'error': str(e)}}))
+    sys.exit(1)
+"
+'''
+        exit_code, stdout, stderr = self.ssh_client.execute_command(python_cmd)
+        if exit_code != 0 and not stdout:
+            raise RuntimeError(f"Command failed: {stderr}")
+        return json.loads(stdout.strip())
     
     def send_command(self, command: str, params: Dict[str, Any] = None) -> Tuple[bool, Any, str]:
         """
@@ -42,7 +119,6 @@ class CommandClient:
             params = {}
         
         try:
-            # Create command JSON
             request = {
                 'command': command,
                 'params': params
@@ -50,67 +126,18 @@ class CommandClient:
             request_json = json.dumps(request)
             
             logger.debug(f"Sending command: {command}")
-            
-            # Encode JSON to base64 to avoid shell escaping issues
-            request_b64 = base64.b64encode(request_json.encode('utf-8')).decode('ascii')
-            
-            # Python script that decodes base64 and sends to daemon
-            python_cmd = f'''python3 -c "
-import socket
-import json
-import sys
-import base64
 
-try:
-    # Decode base64 request
-    request_json = base64.b64decode('{request_b64}').decode('utf-8')
-    
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(10)
-    sock.connect(('localhost', {self.daemon_port}))
-    
-    sock.sendall(request_json.encode('utf-8'))
-    
-    # Receive response
-    data = b''
-    while True:
-        chunk = sock.recv(4096)
-        if not chunk:
-            break
-        data += chunk
-        try:
-            json.loads(data.decode('utf-8'))
-            break
-        except:
-            continue
-    
-    sock.close()
-    print(data.decode('utf-8'))
-    sys.exit(0)
-except Exception as e:
-    print(json.dumps({{'success': False, 'error': str(e)}}))
-    sys.exit(1)
-"
-'''
-            
-            # Execute via SSH
-            exit_code, stdout, stderr = self.ssh_client.execute_command(python_cmd)
-            
-            if exit_code != 0 and not stdout:
-                return False, None, f"Command failed: {stderr}"
-            
-            # Parse response
             try:
-                response = json.loads(stdout.strip())
-                
-                if response.get('success'):
-                    return True, response.get('result'), ""
-                else:
-                    error = response.get('error', 'Unknown error')
-                    return False, None, error
-                    
-            except json.JSONDecodeError as e:
-                return False, None, f"Invalid response: {str(e)}"
+                response = self._send_via_ssh_tunnel(request_json)
+            except Exception as tunnel_error:
+                logger.warning("Direct SSH tunnel command failed, falling back: %s", tunnel_error)
+                response = self._send_via_remote_python(request_json)
+
+            if response.get('success'):
+                return True, response.get('result'), ""
+
+            error = response.get('error', 'Unknown error')
+            return False, None, error
             
         except Exception as e:
             error = f"Command execution failed: {str(e)}"

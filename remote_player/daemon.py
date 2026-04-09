@@ -44,7 +44,14 @@ class KTVDaemon:
         self.db = Database(self.config['database_path'])
         self.player = Player(
             vlc_path=self.config.get('vlc_path', '/usr/bin/vlc'),
-            display=self.config.get('display', ':0')
+            display=self.config.get('display', ':0'),
+            avcodec_hw=self.config.get('vlc_avcodec_hw', 'any'),
+            video_output=self.config.get('vlc_video_output', 'xcb_x11'),
+            avcodec_threads=self.config.get('vlc_avcodec_threads', 2),
+            file_caching_ms=self.config.get('vlc_file_caching_ms', 1000),
+            network_caching_ms=self.config.get('vlc_network_caching_ms', 1500),
+            enable_frame_skip=bool(self.config.get('vlc_enable_frame_skip', True)),
+            extra_vlc_args=self.config.get('vlc_extra_args', []),
         )
         self.api_server = APIServer(port=self.config['api_port'])
         
@@ -71,7 +78,14 @@ class KTVDaemon:
             'broadcast_start': '06:00',
             'broadcast_end': '22:00',
             'vlc_path': '/usr/bin/vlc',
-            'display': ':0'
+            'display': ':0',
+            'vlc_avcodec_hw': 'none',
+            'vlc_video_output': 'xcb_x11',
+            'vlc_avcodec_threads': 2,
+            'vlc_file_caching_ms': 1000,
+            'vlc_network_caching_ms': 1500,
+            'vlc_enable_frame_skip': True,
+            'vlc_extra_args': []
         }
         
         try:
