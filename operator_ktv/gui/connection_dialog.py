@@ -3,9 +3,8 @@ Connection dialog for SSH connection setup and installation
 """
 
 from PyQt6.QtWidgets import (QCheckBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-                             QLineEdit, QPushButton, QSpinBox, QMessageBox,
-                             QProgressDialog, QTextEdit)
-from PyQt6.QtCore import Qt, QThread, QSettings, pyqtSignal
+                             QLineEdit, QPushButton, QSpinBox)
+from PyQt6.QtCore import QSettings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -42,6 +41,8 @@ class ConnectionDialog(QDialog):
         
         self.ip_edit = QLineEdit()
         self.ip_edit.setPlaceholderText("192.168.1.100")
+        self.ip_edit.setAccessibleName("IP адрес сервера")
+        ip_label.setBuddy(self.ip_edit)
         ip_layout.addWidget(self.ip_edit)
         
         layout.addLayout(ip_layout)
@@ -55,6 +56,8 @@ class ConnectionDialog(QDialog):
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(22)
+        self.port_spin.setAccessibleName("Порт SSH")
+        port_label.setBuddy(self.port_spin)
         port_layout.addWidget(self.port_spin)
         port_layout.addStretch()
         
@@ -68,6 +71,8 @@ class ConnectionDialog(QDialog):
         
         self.user_edit = QLineEdit()
         self.user_edit.setPlaceholderText("user")
+        self.user_edit.setAccessibleName("Имя пользователя")
+        user_label.setBuddy(self.user_edit)
         user_layout.addWidget(self.user_edit)
         
         layout.addLayout(user_layout)
@@ -80,6 +85,8 @@ class ConnectionDialog(QDialog):
         
         self.pass_edit = QLineEdit()
         self.pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pass_edit.setAccessibleName("Пароль")
+        pass_label.setBuddy(self.pass_edit)
         pass_layout.addWidget(self.pass_edit)
         
         layout.addLayout(pass_layout)

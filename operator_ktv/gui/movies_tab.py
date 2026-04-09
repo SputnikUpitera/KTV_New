@@ -12,7 +12,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QProgressDialog,
     QPushButton,
     QToolButton,
     QTreeWidget,
@@ -21,8 +20,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ktv_paths import build_movie_file_path
+from ktv_paths import VIDEO_FILE_DIALOG_FILTER, build_movie_file_path, is_supported_video_file
 from .schedule_dialog import ScheduleDialog
+from .upload_helpers import upload_file_with_progress
 from ..models.schedule import ScheduleItem
 
 logger = logging.getLogger(__name__)
@@ -39,8 +39,6 @@ class MoviesTab(QWidget):
         'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
     ]
     DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.webm', '.mov', '.flv', '.wmv', '.m4v'}
-
     def __init__(self, ssh_client=None, cmd_client=None, parent=None):
         super().__init__(parent)
         self.ssh_client = ssh_client
@@ -81,21 +79,25 @@ class MoviesTab(QWidget):
 
         self.refresh_btn = QPushButton("Обновить")
         self.refresh_btn.setProperty("compact", True)
+        self.refresh_btn.setToolTip("Обновить расписание и статус")
         self.refresh_btn.clicked.connect(lambda _checked=False: self.refresh_requested.emit())
         button_layout.addWidget(self.refresh_btn)
 
         self.edit_btn = QPushButton("Изменить время")
         self.edit_btn.setProperty("compact", True)
+        self.edit_btn.setToolTip("Изменить время выбранного фильма")
         self.edit_btn.clicked.connect(self.edit_selected_schedule)
         button_layout.addWidget(self.edit_btn)
 
         self.toggle_btn = QPushButton("Вкл/выкл")
         self.toggle_btn.setProperty("compact", True)
+        self.toggle_btn.setToolTip("Включить или выключить выбранный фильм")
         self.toggle_btn.clicked.connect(self.toggle_selected_schedule)
         button_layout.addWidget(self.toggle_btn)
 
         self.delete_btn = QPushButton("Удалить")
         self.delete_btn.setProperty("compact", True)
+        self.delete_btn.setToolTip("Удалить выбранный фильм из расписания")
         self.delete_btn.clicked.connect(self.delete_selected)
         button_layout.addWidget(self.delete_btn)
 
@@ -126,6 +128,8 @@ class MoviesTab(QWidget):
             add_btn = QToolButton(row_widget)
             add_btn.setText("+")
             add_btn.setObjectName("monthAddButton")
+            add_btn.setToolTip(f"Добавить фильм в {month_name.lower()}")
+            add_btn.setAccessibleName(f"Добавить фильм в {month_name.lower()}")
             add_btn.clicked.connect(lambda _, month=month_num: self.add_movie_for_month(month))
             row_layout.addWidget(add_btn)
             row_layout.addStretch()
@@ -159,21 +163,22 @@ class MoviesTab(QWidget):
             return None
         return data['schedule']
 
-    def refresh_schedules(self):
-        """Reload schedules from the remote system after daemon-side sync."""
+    def refresh_schedules(self, do_sync: bool = False):
+        """Reload schedules from the remote system and sync only when requested."""
         if not self.cmd_client:
             QMessageBox.information(self, "Информация", "Нет подключения к daemon")
             return
 
         try:
-            sync_success, _, sync_error = self.cmd_client.sync_schedules()
-            if not sync_success:
-                if "Unknown command: sync_schedules" in sync_error:
-                    # Fixed: allow older daemon versions to keep working without sync support.
-                    logger.warning("Daemon does not support sync_schedules, loading schedules without sync")
-                else:
-                    QMessageBox.warning(self, "Ошибка", f"Не удалось синхронизировать расписание:\n{sync_error}")
-                    return
+            if do_sync:
+                sync_success, _, sync_error = self.cmd_client.sync_schedules()
+                if not sync_success:
+                    if "Unknown command: sync_schedules" in sync_error:
+                        # Fixed: allow older daemon versions to keep working without sync support.
+                        logger.warning("Daemon does not support sync_schedules, loading schedules without sync")
+                    else:
+                        QMessageBox.warning(self, "Ошибка", f"Не удалось синхронизировать расписание:\n{sync_error}")
+                        return
 
             success, schedules_data, error = self.cmd_client.list_schedules(category='movies')
             if not success:
@@ -213,7 +218,8 @@ class MoviesTab(QWidget):
 
                 for schedule in day_schedules:
                     label = f"{schedule.get_time_string()}  {schedule.filename}"
-                    schedule_item = QTreeWidgetItem(day_item, [label])
+                    state_prefix = "[вкл]" if schedule.enabled else "[выкл]"
+                    schedule_item = QTreeWidgetItem(day_item, [f"{state_prefix} {label}"])
                     schedule_item.setData(0, Qt.ItemDataRole.UserRole, {
                         'type': 'schedule',
                         'schedule': schedule,
@@ -260,7 +266,7 @@ class MoviesTab(QWidget):
             return
 
         files = [url.toLocalFile() for url in event.mimeData().urls()]
-        video_files = [path for path in files if Path(path).suffix.lower() in self.VIDEO_EXTENSIONS]
+        video_files = [path for path in files if is_supported_video_file(path)]
         if not video_files:
             QMessageBox.warning(self, "Ошибка", "Не найдено видеофайлов")
             return
@@ -279,7 +285,7 @@ class MoviesTab(QWidget):
             self,
             "Выберите фильмы",
             "",
-            "Видео (*.mp4 *.avi *.mkv *.webm *.mov *.flv *.wmv *.m4v);;Все файлы (*)",
+            VIDEO_FILE_DIALOG_FILTER,
         )
         for file_path in files:
             self.add_file_to_schedule(file_path, month)
@@ -299,14 +305,6 @@ class MoviesTab(QWidget):
             chosen_day, hour, minute = dialog.get_schedule_slot()
             self.upload_and_schedule(file_path, month, chosen_day, hour, minute)
 
-    def _get_remote_home(self) -> str:
-        """Get the remote user's home directory."""
-        if self.ssh_client and self.ssh_client.is_connected():
-            exit_code, stdout, _ = self.ssh_client.execute_command("echo $HOME")
-            if exit_code == 0 and stdout.strip():
-                return stdout.strip()
-        return "/home/user"
-
     def upload_and_schedule(self, local_path: str, month: int, day: int, hour: int, minute: int):
         """Upload file and add it to the remote schedule."""
         if not self.ssh_client or not self.cmd_client:
@@ -314,25 +312,13 @@ class MoviesTab(QWidget):
             return
 
         filename = Path(local_path).name
-        remote_path = build_movie_file_path(self._get_remote_home(), month, day, hour, minute, filename)
-
-        progress = QProgressDialog(f"Загрузка {filename}...", "Отмена", 0, 100, self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.show()
-
-        def upload_callback(transferred, total):
-            percent = int((transferred / total) * 100) if total else 0
-            progress.setValue(percent)
+        remote_path = build_movie_file_path(self.ssh_client.get_remote_home(), month, day, hour, minute, filename)
 
         try:
-            success, error = self.ssh_client.upload_file(local_path, remote_path, callback=upload_callback)
+            success, error = upload_file_with_progress(self, self.ssh_client, local_path, remote_path)
             if not success:
-                progress.close()
                 QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить файл:\n{error}")
                 return
-
-            progress.setLabelText("Добавление в расписание...")
-            progress.setValue(100)
 
             success, schedule_id, error = self.cmd_client.add_schedule(
                 month=month,
@@ -343,7 +329,6 @@ class MoviesTab(QWidget):
                 filename=filename,
                 category='movies',
             )
-            progress.close()
 
             if not success:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось добавить в расписание:\n{error}")
@@ -353,7 +338,6 @@ class MoviesTab(QWidget):
             self.refresh_schedules()
             self.schedule_changed.emit()
         except Exception as exc:
-            progress.close()
             logger.error("Error uploading/scheduling file: %s", exc)
             QMessageBox.critical(self, "Ошибка", f"Ошибка:\n{exc}")
 
@@ -484,3 +468,6 @@ class MoviesTab(QWidget):
         self.delete_btn.setEnabled(enabled)
         for widgets in self.month_row_widgets.values():
             widgets['button'].setEnabled(enabled)
+        if not enabled:
+            self.schedules = []
+            self.update_tree_with_schedules()

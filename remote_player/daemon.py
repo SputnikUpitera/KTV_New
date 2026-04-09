@@ -22,7 +22,7 @@ from player import Player
 from scheduler import Scheduler
 from playlist_manager import PlaylistManager
 from time_controller import TimeController
-from ktv_paths import parse_movie_path
+from ktv_paths import parse_movie_path, is_supported_video_file
 
 
 class KTVDaemon:
@@ -385,25 +385,12 @@ class KTVDaemon:
             status['broadcasting_active'] = self.time_controller.is_broadcast_time()
         
         current_scheduled = self.scheduler.get_current_scheduled_playback() if self.scheduler else None
+        playlist_snapshot = self.playlist_manager.get_status_snapshot() if self.playlist_manager else None
 
-        if self.playlist_manager:
-            transport_status = self.playlist_manager.get_transport_status()
+        if playlist_snapshot:
             status['playlist'] = {
-                'active': self.playlist_manager.get_active_playlist_name(),
-                'playing': self.playlist_manager.is_playing(),
-                'current_file': self.playlist_manager.get_current_file(),
-                'current_filename': self.playlist_manager.get_current_filename(),
-                'next_file': self.playlist_manager.get_next_file(),
-                'next_filename': self.playlist_manager.get_next_filename(),
-                'paused': transport_status['paused'],
-                'user_paused': transport_status['user_paused'],
-                'system_paused': transport_status['system_paused'],
-                'shuffle_enabled': transport_status['shuffle_enabled'],
-                'loop_enabled': transport_status['loop_enabled'],
-                'has_files': transport_status['has_files'],
-                'can_previous': transport_status['can_previous'],
-                'has_active_clip': transport_status['has_active_clip'],
-                'transport_available': current_scheduled is None and transport_status['has_files'],
+                **playlist_snapshot,
+                'transport_available': current_scheduled is None and playlist_snapshot['has_files'],
             }
 
         if current_scheduled:
@@ -412,11 +399,11 @@ class KTVDaemon:
                 'filename': current_scheduled['filename'],
                 'filepath': current_scheduled['filepath'],
             }
-        elif self.playlist_manager and self.playlist_manager.get_current_filename():
+        elif playlist_snapshot and playlist_snapshot.get('current_filename'):
             status['current_playback'] = {
                 'source': 'clip',
-                'filename': self.playlist_manager.get_current_filename(),
-                'filepath': self.playlist_manager.get_current_file(),
+                'filename': playlist_snapshot['current_filename'],
+                'filepath': playlist_snapshot['current_file'],
             }
         else:
             status['current_playback'] = {
@@ -427,11 +414,9 @@ class KTVDaemon:
 
         next_clip_filename = None
         next_clip_file = None
-        if self.playlist_manager:
-            playlist_status = self.playlist_manager.get_transport_status()
-            if not playlist_status['shuffle_enabled']:
-                next_clip_filename = self.playlist_manager.get_next_filename()
-                next_clip_file = self.playlist_manager.get_next_file()
+        if playlist_snapshot and not playlist_snapshot['shuffle_enabled']:
+            next_clip_filename = playlist_snapshot['next_filename']
+            next_clip_file = playlist_snapshot['next_file']
 
         status['next_clip'] = {
             'filename': next_clip_filename,
@@ -453,7 +438,7 @@ class KTVDaemon:
         logger.info("Starting KTV Daemon...")
 
         self.media_base_path = Path(self.config.get('media_base_path', os.path.expanduser('~/oktv')))
-        self.clips_root = self.media_base_path / 'clips'
+        self.clips_root = Path(self.config.get('clips_folder') or (self.media_base_path / 'clips'))
         self.config['media_base_path'] = str(self.media_base_path)
         self.config['clips_folder'] = str(self.clips_root)
         self.media_base_path.mkdir(parents=True, exist_ok=True)
@@ -598,7 +583,7 @@ class KTVDaemon:
 
     def _is_video_file(self, path: Path) -> bool:
         """Check whether a path is a supported media file."""
-        return path.is_file() and path.suffix.lower() in PlaylistManager.VIDEO_EXTENSIONS
+        return path.is_file() and is_supported_video_file(path)
 
     def _is_under_clips_root(self, path: Path) -> bool:
         """Check whether a path belongs to the clips subtree."""
@@ -613,13 +598,23 @@ class KTVDaemon:
         return bool(self.config.get('aggressive_normalization', False))
 
     def _iter_movie_files(self) -> List[Path]:
-        """Collect movie files under the canonical schedule root."""
+        """Collect movie files from canonical `MM/DD/HH-MM/` schedule directories."""
         movie_files: List[Path] = []
-        for file_path in self.media_base_path.rglob('*'):
-            if self._is_under_clips_root(file_path):
+        for month_dir in sorted(self.media_base_path.iterdir(), key=lambda item: item.name):
+            if month_dir == self.clips_root or not month_dir.is_dir() or not month_dir.name.isdigit():
                 continue
-            if self._is_video_file(file_path):
-                movie_files.append(file_path)
+            for day_dir in sorted(month_dir.iterdir(), key=lambda item: item.name):
+                if not day_dir.is_dir() or not day_dir.name.isdigit():
+                    continue
+                for slot_dir in sorted(day_dir.iterdir(), key=lambda item: item.name):
+                    if not slot_dir.is_dir() or '-' not in slot_dir.name:
+                        continue
+                    hour_part, minute_part = slot_dir.name.split('-', 1)
+                    if not (hour_part.isdigit() and minute_part.isdigit()):
+                        continue
+                    for file_path in sorted(slot_dir.iterdir(), key=lambda item: item.name):
+                        if self._is_video_file(file_path):
+                            movie_files.append(file_path)
         movie_files.sort(key=lambda item: str(item))
         return movie_files
 

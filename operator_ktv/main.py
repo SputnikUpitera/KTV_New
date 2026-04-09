@@ -122,7 +122,7 @@ def setup_dark_theme(app):
             background-color: #363636;
         }
         QPushButton[compact="true"] {
-            min-height: 24px;
+            min-height: 28px;
             padding: 2px 10px;
             border-radius: 6px;
         }
@@ -150,18 +150,18 @@ def setup_dark_theme(app):
             color: #000000;
         }
         QToolButton#monthAddButton {
-            min-width: 14px;
-            min-height: 14px;
-            padding: 0px;
+            min-width: 24px;
+            min-height: 24px;
+            padding: 2px;
             border: 0px;
-            border-radius: 0px;
+            border-radius: 4px;
             background-color: transparent;
             color: #d8d8d8;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 400;
         }
         QToolButton#monthAddButton:hover {
-            background-color: transparent;
+            background-color: #353535;
             color: #ffffff;
         }
         QLabel#sectionHeaderLabel {
@@ -181,8 +181,8 @@ def setup_dark_theme(app):
             font-weight: 400;
         }
         QLabel#playbackCaptionLabel {
-            color: #9a9a9a;
-            font-size: 9px;
+            color: #b0b0b0;
+            font-size: 11px;
             letter-spacing: 0.4px;
         }
         QLabel#currentPlaybackLabel {
@@ -190,10 +190,10 @@ def setup_dark_theme(app):
             font-weight: 700;
         }
         QLabel#nextClipLabel {
-            color: #8a8a8a;
-            font-size: 10px;
+            color: #b0b0b0;
+            font-size: 11px;
         }
-        QPushButton:focus, QListWidget:focus, QTreeWidget:focus {
+        QPushButton:focus, QToolButton:focus, QListWidget:focus, QTreeWidget:focus, QLineEdit:focus, QAbstractSpinBox:focus {
             border: 1px solid #63a4ff;
         }
     """)

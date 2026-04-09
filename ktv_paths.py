@@ -1,12 +1,14 @@
 """
-Shared path helpers for scheduled movies and clip playlists.
+Shared media/path helpers for scheduled movies and clip playlists.
 """
 
 from pathlib import Path, PurePosixPath
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 OKTV_ROOT_NAME = "oktv"
 CLIPS_DIR_NAME = "clips"
+VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mkv', '.webm', '.mov', '.flv', '.wmv', '.m4v')
+VIDEO_FILE_DIALOG_FILTER = "Видео (*.mp4 *.avi *.mkv *.webm *.mov *.flv *.wmv *.m4v);;Все файлы (*)"
 
 
 def normalize_remote_home(home_dir: str) -> PurePosixPath:
@@ -49,6 +51,11 @@ def build_movie_file_path(home_dir: str, month: int, day: int, hour: int, minute
 def build_playlist_directory(home_dir: str, playlist_name: str) -> str:
     """Build the playlist directory path."""
     return str(PurePosixPath(get_clips_root(home_dir)) / playlist_name.strip())
+
+
+def is_supported_video_file(path_like: Union[str, Path, PurePosixPath]) -> bool:
+    """Check whether a filename/path has a supported video extension."""
+    return Path(str(path_like)).suffix.lower() in VIDEO_EXTENSIONS
 
 
 def parse_movie_path(filepath: str) -> Optional[Tuple[int, int, int, int, str]]:

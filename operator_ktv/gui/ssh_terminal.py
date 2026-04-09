@@ -51,6 +51,7 @@ class SSHTerminalWidget(QWidget):
         self.input_line = QLineEdit()
         self.input_line.setFont(QFont('Courier New', 9))
         self.input_line.returnPressed.connect(self.execute_command)
+        self.input_line.installEventFilter(self)
         self.input_line.setStyleSheet("""
             QLineEdit {
                 background-color: #1e1e1e;
@@ -130,22 +131,33 @@ class SSHTerminalWidget(QWidget):
         except Exception as e:
             self.append_output(f"Ошибка выполнения: {str(e)}\n\n")
     
-    def keyPressEvent(self, event):
-        """Handle key press events for history navigation"""
+    def _handle_history_navigation(self, event) -> bool:
+        """Navigate command history from the active input control."""
         if event.key() == Qt.Key.Key_Up:
-            # Previous command in history
             if self.command_history and self.history_index > 0:
                 self.history_index -= 1
                 self.input_line.setText(self.command_history[self.history_index])
-        elif event.key() == Qt.Key.Key_Down:
-            # Next command in history
+            return True
+        if event.key() == Qt.Key.Key_Down:
             if self.command_history and self.history_index < len(self.command_history) - 1:
                 self.history_index += 1
                 self.input_line.setText(self.command_history[self.history_index])
             elif self.history_index >= len(self.command_history) - 1:
                 self.history_index = len(self.command_history)
                 self.input_line.clear()
-        else:
+            return True
+        return False
+
+    def eventFilter(self, obj, event):
+        """Handle history shortcuts inside the input field."""
+        if obj is self.input_line and event.type() == event.Type.KeyPress:
+            if self._handle_history_navigation(event):
+                return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event):
+        """Handle key press events for history navigation."""
+        if not self._handle_history_navigation(event):
             super().keyPressEvent(event)
     
     def clear(self):

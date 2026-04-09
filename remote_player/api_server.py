@@ -70,7 +70,7 @@ class APIServer:
         while self.running:
             try:
                 client_socket, address = self.server_socket.accept()
-                logger.info(f"Client connected from {address}")
+                logger.debug(f"Client connected from {address}")
                 
                 # Handle client in a separate thread
                 client_thread = threading.Thread(
@@ -97,12 +97,6 @@ class APIServer:
                 if not chunk:
                     break
                 data += chunk
-                # Check if we have a complete JSON message
-                try:
-                    json.loads(data.decode('utf-8'))
-                    break
-                except json.JSONDecodeError:
-                    continue
             
             if not data:
                 logger.warning(f"No data received from {address}")
@@ -132,7 +126,7 @@ class APIServer:
                 client_socket.close()
             except:
                 pass
-            logger.info(f"Client {address} disconnected")
+            logger.debug(f"Client {address} disconnected")
     
     def _process_command(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Process a command request"""

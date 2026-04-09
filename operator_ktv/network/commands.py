@@ -21,10 +21,11 @@ class CommandClient:
             ssh_client: Connected SSH client instance
         """
         self.ssh_client = ssh_client
-        self.daemon_port = 8888
+        self.daemon_port = ssh_client.get_remote_daemon_port() if ssh_client else 8888
 
     def _send_via_ssh_tunnel(self, request_json: str) -> Dict[str, Any]:
         """Send a command through an SSH direct-tcpip channel to the daemon."""
+        self.daemon_port = self.ssh_client.get_remote_daemon_port()
         transport = self.ssh_client.client.get_transport() if self.ssh_client.client else None
         if not transport or not transport.is_active():
             raise RuntimeError("SSH transport is not active")
@@ -45,10 +46,6 @@ class CommandClient:
                 if not chunk:
                     break
                 data.extend(chunk)
-                try:
-                    return json.loads(data.decode('utf-8'))
-                except json.JSONDecodeError:
-                    continue
 
             if not data:
                 raise RuntimeError("Empty response from daemon")
@@ -61,6 +58,7 @@ class CommandClient:
 
     def _send_via_remote_python(self, request_json: str) -> Dict[str, Any]:
         """Fallback path using a short remote Python bridge."""
+        self.daemon_port = self.ssh_client.get_remote_daemon_port()
         request_literal = repr(request_json)
         python_cmd = f'''python3 -c "
 import socket
@@ -75,6 +73,7 @@ try:
     sock.connect(('localhost', {self.daemon_port}))
 
     sock.sendall(request_json.encode('utf-8'))
+    sock.shutdown(socket.SHUT_WR)
 
     data = b''
     while True:
@@ -82,11 +81,6 @@ try:
         if not chunk:
             break
         data += chunk
-        try:
-            json.loads(data.decode('utf-8'))
-            break
-        except Exception:
-            continue
 
     sock.close()
     print(data.decode('utf-8'))
@@ -205,11 +199,10 @@ except Exception as e:
         success, result, error = self.send_command('sync_schedules')
         return success, result or {}, error
     
-    def create_playlist(self, name: str, folder_path: str) -> Tuple[bool, int, str]:
+    def create_playlist(self, name: str) -> Tuple[bool, int, str]:
         """Create a new playlist"""
         params = {
             'name': name,
-            'folder_path': folder_path
         }
         success, result, error = self.send_command('create_playlist', params)
         playlist_id = result.get('playlist_id', 0) if result else 0

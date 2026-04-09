@@ -163,13 +163,15 @@ class Player:
     
     def get_status(self) -> dict:
         """Get current player status"""
-        return {
-            'is_playing': self.is_playing,
-            'is_paused': self.is_paused,
-            'can_pause': self.has_media(),
-            'current_file': self.current_file,
-            'filename': Path(self.current_file).name if self.current_file else None
-        }
+        with self.state_lock:
+            current_file = self.current_file
+            return {
+                'is_playing': self.is_playing,
+                'is_paused': self.is_paused,
+                'can_pause': current_file is not None,
+                'current_file': current_file,
+                'filename': Path(current_file).name if current_file else None
+            }
     
     def is_busy(self) -> bool:
         """Check if player is currently playing"""

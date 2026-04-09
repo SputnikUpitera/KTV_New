@@ -47,6 +47,14 @@ class InstallationVerifier:
         }
         
         try:
+            remote_config = self.ssh.get_remote_daemon_config(refresh=True)
+            api_port = self.ssh.get_remote_daemon_port(refresh=False)
+            remote_home = self.ssh.get_remote_home()
+            media_base_path = remote_config.get('media_base_path') or '~/oktv'
+            clips_path = remote_config.get('clips_folder') or f"{str(media_base_path).rstrip('/')}/clips"
+            if isinstance(clips_path, str) and clips_path.startswith('~/'):
+                clips_path = f"{remote_home}/{clips_path[2:]}"
+
             # Check daemon files
             logger.info("Checking daemon files...")
             exit_code, stdout, stderr = self.ssh.execute_command('test -f /opt/ktv/daemon.py && echo "yes" || echo "no"')
@@ -103,12 +111,14 @@ class InstallationVerifier:
             
             # Check media directories (oktv-based structure)
             logger.info("Checking media directories...")
-            exit_code, stdout, stderr = self.ssh.execute_command('test -d ~/oktv/clips && echo "yes" || echo "no"')
+            exit_code, stdout, stderr = self.ssh.execute_command(
+                f'test -d "{clips_path}" && echo "yes" || echo "no"'
+            )
             if 'yes' in stdout:
                 results['media_directories_exist'] = True
                 logger.info("✓ Media directories exist")
             else:
-                results['errors'].append("Clips directory ~/oktv/clips not found")
+                results['errors'].append(f"Clips directory not found: {clips_path}")
                 logger.warning("✗ Media directories not found")
             
             # Check config file
@@ -138,7 +148,7 @@ class InstallationVerifier:
                 
                 # Try to connect to API port
                 exit_code, stdout, stderr = self.ssh.execute_command(
-                    'timeout 5 bash -c "echo > /dev/tcp/localhost/8888" 2>&1 && echo "yes" || echo "no"'
+                    f'timeout 5 bash -c "echo > /dev/tcp/localhost/{api_port}" 2>&1 && echo "yes" || echo "no"'
                 )
                 if 'yes' in stdout:
                     results['api_port_responding'] = True
@@ -192,7 +202,7 @@ class InstallationVerifier:
             ("Media Directories", results.get('media_directories_exist')),
             ("Configuration", results.get('config_exists')),
             ("VLC Available", results.get('vlc_available')),
-            ("API Port 8888", results.get('api_port_responding'))
+            ("API Port", results.get('api_port_responding'))
         ]
         
         for name, passed in checks:

@@ -16,13 +16,13 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QProgressDialog,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
-from ktv_paths import build_playlist_directory
+from ktv_paths import VIDEO_FILE_DIALOG_FILTER, is_supported_video_file
+from .upload_helpers import upload_file_with_progress
 from ..models.playlist import Playlist
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,6 @@ class ClipsTab(QWidget):
     """Widget for managing clip playlists."""
 
     playlist_changed = pyqtSignal()
-    VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.webm', '.mov', '.flv', '.wmv', '.m4v'}
 
     def __init__(self, ssh_client=None, cmd_client=None, parent=None):
         super().__init__(parent)
@@ -74,16 +73,20 @@ class ClipsTab(QWidget):
 
         self.create_btn = QPushButton("Создать")
         self.create_btn.setProperty("compact", True)
+        self.create_btn.setToolTip("Создать новый плейлист")
         self.create_btn.clicked.connect(self.create_playlist)
         playlist_btn_layout.addWidget(self.create_btn)
 
         self.activate_btn = QPushButton("Вкл")
         self.activate_btn.setProperty("compact", True)
+        self.activate_btn.setToolTip("Сделать выбранный плейлист активным")
+        self.activate_btn.setAccessibleName("Сделать выбранный плейлист активным")
         self.activate_btn.clicked.connect(self.activate_selected_playlist)
         playlist_btn_layout.addWidget(self.activate_btn)
 
         self.delete_btn = QPushButton("Удалить")
         self.delete_btn.setProperty("compact", True)
+        self.delete_btn.setToolTip("Удалить выбранный плейлист")
         self.delete_btn.clicked.connect(self.delete_playlist)
         playlist_btn_layout.addWidget(self.delete_btn)
 
@@ -129,16 +132,20 @@ class ClipsTab(QWidget):
 
         self.add_file_btn = QPushButton("Добавить")
         self.add_file_btn.setProperty("compact", True)
+        self.add_file_btn.setToolTip("Добавить файлы в выбранный плейлист")
         self.add_file_btn.clicked.connect(self.add_files_to_selected_playlist)
         files_btn_layout.addWidget(self.add_file_btn)
 
         self.play_file_btn = QPushButton("Вкл")
         self.play_file_btn.setProperty("compact", True)
+        self.play_file_btn.setToolTip("Воспроизвести выбранный файл")
+        self.play_file_btn.setAccessibleName("Воспроизвести выбранный файл")
         self.play_file_btn.clicked.connect(self.play_selected_file)
         files_btn_layout.addWidget(self.play_file_btn)
 
         self.delete_file_btn = QPushButton("Удалить")
         self.delete_file_btn.setProperty("compact", True)
+        self.delete_file_btn.setToolTip("Удалить выбранный файл из плейлиста")
         self.delete_file_btn.clicked.connect(self.delete_selected_file)
         files_btn_layout.addWidget(self.delete_file_btn)
 
@@ -175,8 +182,8 @@ class ClipsTab(QWidget):
         self.play_file_btn.setEnabled(enabled and has_file)
         self.delete_file_btn.setEnabled(enabled and has_file)
 
-    def refresh_playlists(self):
-        """Reload playlists from the remote system after daemon-side sync."""
+    def refresh_playlists(self, do_sync: bool = False):
+        """Reload playlists from the remote system and sync only when requested."""
         if not self.cmd_client:
             QMessageBox.information(self, "Информация", "Нет подключения к daemon")
             return
@@ -184,14 +191,15 @@ class ClipsTab(QWidget):
         current_name = self._selected_playlist().name if self._selected_playlist() else None
 
         try:
-            sync_success, _, sync_error = self.cmd_client.sync_playlists()
-            if not sync_success:
-                if "Unknown command: sync_playlists" in sync_error:
-                    # Fixed: allow older daemon versions to keep working without sync support.
-                    logger.warning("Daemon does not support sync_playlists, loading playlists without sync")
-                else:
-                    QMessageBox.warning(self, "Ошибка", f"Не удалось синхронизировать плейлисты:\n{sync_error}")
-                    return
+            if do_sync:
+                sync_success, _, sync_error = self.cmd_client.sync_playlists()
+                if not sync_success:
+                    if "Unknown command: sync_playlists" in sync_error:
+                        # Fixed: allow older daemon versions to keep working without sync support.
+                        logger.warning("Daemon does not support sync_playlists, loading playlists without sync")
+                    else:
+                        QMessageBox.warning(self, "Ошибка", f"Не удалось синхронизировать плейлисты:\n{sync_error}")
+                        return
 
             success, playlists_data, error = self.cmd_client.list_playlists()
             if not success:
@@ -211,7 +219,10 @@ class ClipsTab(QWidget):
         current_row = -1
 
         for index, playlist in enumerate(self.playlists):
-            item = QListWidgetItem(str(playlist))
+            label = str(playlist)
+            if playlist.active:
+                label = f"[активен] {label}"
+            item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, playlist)
             item.setToolTip(playlist.folder_path)
 
@@ -244,15 +255,8 @@ class ClipsTab(QWidget):
         if not name:
             return
 
-        folder_path = build_playlist_directory(self._get_remote_home(), name)
-
         try:
-            success, error = self.ssh_client.create_directory(folder_path)
-            if not success:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось создать папку:\n{error}")
-                return
-
-            success, playlist_id, error = self.cmd_client.create_playlist(name, folder_path)
+            success, playlist_id, error = self.cmd_client.create_playlist(name)
             if not success:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось создать плейлист:\n{error}")
                 return
@@ -340,7 +344,7 @@ class ClipsTab(QWidget):
             return
 
         visible_files = sorted(
-            [name for name in files if Path(name).suffix.lower() in self.VIDEO_EXTENSIONS],
+            [name for name in files if is_supported_video_file(name)],
             key=str.lower,
         )
         if not visible_files:
@@ -388,7 +392,7 @@ class ClipsTab(QWidget):
             return
 
         files = [url.toLocalFile() for url in event.mimeData().urls()]
-        video_files = [path for path in files if Path(path).suffix.lower() in self.VIDEO_EXTENSIONS]
+        video_files = [path for path in files if is_supported_video_file(path)]
         if not video_files:
             QMessageBox.warning(self, "Ошибка", "Не найдено видеофайлов")
             return
@@ -406,23 +410,13 @@ class ClipsTab(QWidget):
             filename = Path(file_path).name
             remote_path = f"{playlist.folder_path}/{filename}"
 
-            progress = QProgressDialog(f"Загрузка {filename}...", "Отмена", 0, 100, self)
-            progress.setWindowModality(Qt.WindowModality.WindowModal)
-            progress.show()
-
-            def upload_callback(transferred, total):
-                percent = int((transferred / total) * 100) if total else 0
-                progress.setValue(percent)
-
             try:
-                success, error = self.ssh_client.upload_file(file_path, remote_path, callback=upload_callback)
-                progress.close()
+                success, error = upload_file_with_progress(self, self.ssh_client, file_path, remote_path)
 
                 if not success:
                     QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить {filename}:\n{error}")
                     break
             except Exception as exc:
-                progress.close()
                 logger.error("Error uploading file: %s", exc)
                 QMessageBox.critical(self, "Ошибка", f"Ошибка загрузки {filename}:\n{exc}")
                 break
@@ -442,7 +436,7 @@ class ClipsTab(QWidget):
             self,
             "Добавить файлы в плейлист",
             "",
-            "Видео (*.mp4 *.avi *.mkv *.webm *.mov *.flv *.wmv *.m4v);;Все файлы (*)",
+            VIDEO_FILE_DIALOG_FILTER,
         )
         if not files:
             return
@@ -503,14 +497,6 @@ class ClipsTab(QWidget):
         except Exception as exc:
             logger.error("Error deleting playlist file: %s", exc)
             QMessageBox.critical(self, "Ошибка", f"Ошибка:\n{exc}")
-
-    def _get_remote_home(self) -> str:
-        """Get the remote user's home directory."""
-        if self.ssh_client and self.ssh_client.is_connected():
-            exit_code, stdout, _ = self.ssh_client.execute_command("echo $HOME")
-            if exit_code == 0 and stdout.strip():
-                return stdout.strip()
-        return "/home/user"
 
     def set_clients(self, ssh_client, cmd_client):
         """Set the SSH and command clients."""

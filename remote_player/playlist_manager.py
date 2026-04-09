@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from ktv_paths import VIDEO_EXTENSIONS, is_supported_video_file
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,7 +22,7 @@ class PlaylistManager:
     Plays videos from a playlist when no scheduled content is playing.
     """
 
-    VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.webm', '.mov', '.flv', '.wmv', '.m4v'}
+    VIDEO_EXTENSIONS = set(VIDEO_EXTENSIONS)
 
     def __init__(self, database, player, clips_path: str = '~/oktv/clips'):
         self.db = database
@@ -173,7 +175,7 @@ class PlaylistManager:
         video_files = []
         try:
             for entry in directory.iterdir():
-                if entry.is_file() and entry.suffix.lower() in self.VIDEO_EXTENSIONS:
+                if entry.is_file() and is_supported_video_file(entry):
                     video_files.append(entry)
         except Exception as exc:
             logger.error("Error scanning directory %s: %s", directory, exc)
@@ -290,6 +292,44 @@ class PlaylistManager:
                 'current_index': self.current_index,
                 'has_files': bool(self.current_files),
                 'can_previous': can_previous,
+                'has_active_clip': self.current_playlist_file is not None and self.player.has_media(),
+            }
+
+    def get_status_snapshot(self) -> dict:
+        """Return a complete playlist snapshot with one lock acquisition."""
+        with self.state_lock:
+            active_name = self.current_playlist['name'] if self.current_playlist else None
+            current_file = str(self.current_playlist_file) if self.current_playlist_file and self.player.has_media() else None
+            next_file = None
+            next_filename = None
+            if self.current_files and not self.shuffle_enabled:
+                next_index = self._next_sequential_index_locked()
+                if next_index is not None:
+                    next_path = self.current_files[next_index]
+                    next_file = str(next_path)
+                    next_filename = next_path.name
+
+            return {
+                'active': active_name,
+                'playing': (
+                    self.running
+                    and not self.system_paused
+                    and not self.user_paused
+                    and self.player.has_media()
+                    and not self.player.is_paused
+                    and self.current_playlist_file is not None
+                ),
+                'current_file': current_file,
+                'current_filename': Path(current_file).name if current_file else None,
+                'next_file': next_file,
+                'next_filename': next_filename,
+                'paused': self.paused,
+                'user_paused': self.user_paused,
+                'system_paused': self.system_paused,
+                'shuffle_enabled': self.shuffle_enabled,
+                'loop_enabled': self.loop_enabled,
+                'has_files': bool(self.current_files),
+                'can_previous': self.history_cursor > 0,
                 'has_active_clip': self.current_playlist_file is not None and self.player.has_media(),
             }
 

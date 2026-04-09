@@ -18,10 +18,9 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import QSize, Qt, QTimer
-from PyQt6.QtGui import QAction, QColor, QBrush, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QSize, Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QBrush, QIcon, QPainter, QPen, QPixmap, QKeySequence
 import logging
-import sys
 from pathlib import Path
 
 from .connection_dialog import ConnectionDialog
@@ -37,6 +36,23 @@ from ..installer.verify_install import InstallationVerifier
 logger = logging.getLogger(__name__)
 
 
+class StatusFetchThread(QThread):
+    """Fetch daemon playback status away from the UI thread."""
+
+    status_ready = pyqtSignal(bool, object, str)
+
+    def __init__(self, cmd_client):
+        super().__init__()
+        self.cmd_client = cmd_client
+
+    def run(self):
+        try:
+            success, status, error = self.cmd_client.get_status()
+            self.status_ready.emit(success, status, error)
+        except Exception as exc:
+            self.status_ready.emit(False, {}, str(exc))
+
+
 class MainWindow(QMainWindow):
     """Main application window"""
     
@@ -47,11 +63,13 @@ class MainWindow(QMainWindow):
         self.cmd_client = None
         self.connected = False
         self.connection_info = {}
+        self.status_thread = None
+        self.status_request_pending = False
         
         self.setup_ui()
         self.setup_menu()
 
-        self.movies_tab.refresh_requested.connect(self.refresh_all_views)
+        self.movies_tab.refresh_requested.connect(self.manual_refresh_all_views)
         self.movies_tab.schedule_changed.connect(self.refresh_playback_status)
         self.clips_tab.playlist_changed.connect(self.refresh_playback_status)
 
@@ -168,16 +186,19 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("Файл")
         
         connect_action = QAction("Подключиться...", self)
+        connect_action.setShortcut(QKeySequence.StandardKey.Open)
         connect_action.triggered.connect(self.show_connection_dialog)
         file_menu.addAction(connect_action)
         
         disconnect_action = QAction("Отключиться", self)
+        disconnect_action.setShortcut("Ctrl+D")
         disconnect_action.triggered.connect(self.disconnect)
         file_menu.addAction(disconnect_action)
         
         file_menu.addSeparator()
         
         exit_action = QAction("Выход", self)
+        exit_action.setShortcut(QKeySequence.StandardKey.Quit)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
@@ -185,6 +206,7 @@ class MainWindow(QMainWindow):
         tools_menu = menubar.addMenu("Инструменты")
         
         terminal_action = QAction("SSH Консоль...", self)
+        terminal_action.setShortcut("Ctrl+T")
         terminal_action.triggered.connect(self.show_terminal)
         tools_menu.addAction(terminal_action)
         
@@ -203,10 +225,12 @@ class MainWindow(QMainWindow):
         tools_menu.addSeparator()
         
         status_action = QAction("Статус daemon...", self)
+        status_action.setShortcut("F6")
         status_action.triggered.connect(self.show_daemon_status)
         tools_menu.addAction(status_action)
         
         logs_action = QAction("Логи daemon...", self)
+        logs_action.setShortcut("F7")
         logs_action.triggered.connect(self.show_daemon_logs)
         tools_menu.addAction(logs_action)
         
@@ -282,7 +306,7 @@ class MainWindow(QMainWindow):
             self.clips_tab.set_clients(self.ssh_client, self.cmd_client)
             
             # Refresh data
-            self.refresh_all_views()
+            self.refresh_all_views(do_sync=True)
             self.status_timer.start()
             
             QMessageBox.information(self, "Успех", "Подключено к удалённой системе")
@@ -304,6 +328,11 @@ class MainWindow(QMainWindow):
     def disconnect(self):
         """Disconnect from remote system"""
         self.status_timer.stop()
+        self.status_request_pending = False
+        if self.status_thread and self.status_thread.isRunning():
+            self.status_thread.quit()
+            self.status_thread.wait(1000)
+        self.status_thread = None
         self.connected = False
         self.cmd_client = None
 
@@ -328,6 +357,7 @@ class MainWindow(QMainWindow):
         button.setCheckable(checkable)
         button.setIconSize(QSize(18, 18))
         button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip or text or "Кнопка управления воспроизведением")
         if icon is not None:
             button.setIcon(icon)
         if text:
@@ -372,56 +402,8 @@ class MainWindow(QMainWindow):
             button.setEnabled(False)
         self.shuffle_btn.setChecked(False)
 
-    def refresh_all_views(self):
-        """Refresh movies, playlists and playback status together."""
-        if self.movies_tab.cmd_client:
-            self.movies_tab.refresh_schedules()
-        if self.clips_tab.cmd_client:
-            self.clips_tab.refresh_playlists()
-        self.refresh_playback_status()
-
-    def _execute_transport_command(self, command_name: str, error_title: str):
-        """Call a daemon transport command and refresh the banner."""
-        if not self.cmd_client:
-            return
-
-        command = getattr(self.cmd_client, command_name)
-        success, _, error = command()
-        if not success:
-            QMessageBox.warning(self, error_title, error)
-        self.refresh_playback_status()
-
-    def toggle_play_pause(self):
-        """Toggle play or pause for the active clip playlist."""
-        self._execute_transport_command('toggle_play_pause', "Не удалось изменить состояние воспроизведения")
-
-    def stop_playback(self):
-        """Stop clip playback."""
-        self._execute_transport_command('stop_playback', "Не удалось остановить воспроизведение")
-
-    def next_clip(self):
-        """Start the next clip."""
-        self._execute_transport_command('next_clip', "Не удалось переключить на следующий клип")
-
-    def toggle_shuffle(self):
-        """Toggle random clip order."""
-        self._execute_transport_command('toggle_shuffle', "Не удалось изменить случайный режим")
-
-    def refresh_playback_status(self):
-        """Refresh the compact playback banner in the main window."""
-        if not self.cmd_client:
-            self._reset_transport_controls()
-            return
-
-        success, status, error = self.cmd_client.get_status()
-        if not success:
-            logger.warning("Could not refresh playback status: %s", error)
-            self.current_playback_label.setText("Статус недоступен")
-            self.next_clip_label.setText("Следующий клип: —")
-            self.next_clip_label.setVisible(True)
-            self._reset_transport_controls(reset_text=False)
-            return
-
+    def _apply_playback_status(self, status: dict):
+        """Render daemon playback status into the compact banner."""
         current = status.get('current_playback', {})
         source = current.get('source')
         filename = current.get('filename')
@@ -470,6 +452,83 @@ class MainWindow(QMainWindow):
             QStyle.StandardPixmap.SP_MediaPlay if paused or source != 'clip' else QStyle.StandardPixmap.SP_MediaPause
         )
         self.play_pause_btn.setIcon(play_icon)
+
+    def _status_fetch_finished(self, success: bool, status: dict, error: str):
+        """Handle completion of a background status fetch."""
+        self.status_request_pending = False
+        if self.status_thread:
+            self.status_thread.deleteLater()
+            self.status_thread = None
+
+        if not self.cmd_client:
+            return
+
+        if not success:
+            logger.warning("Could not refresh playback status: %s", error)
+            self.current_playback_label.setText("Статус недоступен")
+            self.next_clip_label.setText("Следующий клип: —")
+            self.next_clip_label.setVisible(True)
+            self._reset_transport_controls(reset_text=False)
+            return
+
+        self._apply_playback_status(status)
+
+    def refresh_all_views(self, do_sync: bool = False):
+        """Refresh movies, playlists and playback status together."""
+        if self.movies_tab.cmd_client:
+            self.movies_tab.refresh_schedules(do_sync=do_sync)
+        if self.clips_tab.cmd_client:
+            self.clips_tab.refresh_playlists(do_sync=do_sync)
+        self.refresh_playback_status()
+
+    def manual_refresh_all_views(self):
+        """Refresh all views and run daemon-side synchronization."""
+        self.refresh_all_views(do_sync=True)
+
+    def _execute_transport_command(self, command_name: str, error_title: str):
+        """Call a daemon transport command and refresh the banner."""
+        if not self.cmd_client:
+            return
+
+        command = getattr(self.cmd_client, command_name)
+        success, status, error = command()
+        if not success:
+            QMessageBox.warning(self, error_title, error)
+            self.refresh_playback_status()
+            return
+        if status:
+            self._apply_playback_status(status)
+        else:
+            self.refresh_playback_status()
+
+    def toggle_play_pause(self):
+        """Toggle play or pause for the active clip playlist."""
+        self._execute_transport_command('toggle_play_pause', "Не удалось изменить состояние воспроизведения")
+
+    def stop_playback(self):
+        """Stop clip playback."""
+        self._execute_transport_command('stop_playback', "Не удалось остановить воспроизведение")
+
+    def next_clip(self):
+        """Start the next clip."""
+        self._execute_transport_command('next_clip', "Не удалось переключить на следующий клип")
+
+    def toggle_shuffle(self):
+        """Toggle random clip order."""
+        self._execute_transport_command('toggle_shuffle', "Не удалось изменить случайный режим")
+
+    def refresh_playback_status(self):
+        """Refresh the compact playback banner in the main window."""
+        if not self.cmd_client:
+            self._reset_transport_controls()
+            return
+        if self.status_request_pending:
+            return
+
+        self.status_request_pending = True
+        self.status_thread = StatusFetchThread(self.cmd_client)
+        self.status_thread.status_ready.connect(self._status_fetch_finished)
+        self.status_thread.start()
     
     def show_terminal(self):
         """Show SSH terminal window"""
@@ -592,16 +651,28 @@ class MainWindow(QMainWindow):
         success, status, error = self.cmd_client.get_status()
         
         if success:
+            current_playback = status.get('current_playback', {})
+            playlist_status = status.get('playlist', {})
+            player_status = status.get('player', {})
+            paused = bool(player_status.get('is_paused')) or bool(playlist_status.get('paused'))
+
+            player_summary = "Остановлен"
+            if current_playback.get('source') == 'movie':
+                player_summary = "Воспроизводится фильм"
+            elif current_playback.get('source') == 'clip':
+                player_summary = "Клип на паузе" if paused else "Воспроизводится клип"
+            elif player_status.get('is_playing'):
+                player_summary = "Воспроизводится"
+
             # Format status info
             info_lines = [
                 f"Daemon запущен: Да",
-                f"Плеер: {'Воспроизводится' if status.get('player', {}).get('is_playing') else 'Остановлен'}",
+                f"Плеер: {player_summary}",
             ]
             
-            if status.get('player', {}).get('current_file'):
+            if player_status.get('current_file'):
                 info_lines.append(f"Текущий файл: {status['player']['filename']}")
 
-            current_playback = status.get('current_playback', {})
             if current_playback.get('source'):
                 info_lines.append(
                     f"Источник: {'Фильм' if current_playback['source'] == 'movie' else 'Клип'}"

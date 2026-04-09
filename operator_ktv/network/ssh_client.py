@@ -5,9 +5,9 @@ SSH/SFTP Client for remote Linux system communication
 import paramiko
 import socket
 import logging
+import json
 from pathlib import Path
-from typing import Optional, Callable, Tuple
-import time
+from typing import Optional, Callable, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,8 @@ class SSHClient:
         self.port = None
         self.username = None
         self.password = None  # Store password for sudo operations
+        self.remote_home: Optional[str] = None
+        self.remote_daemon_config: Optional[Dict[str, Any]] = None
     
     def connect(self, host: str, port: int = 22, username: str = None, 
                 password: str = None, key_file: str = None, timeout: int = 30) -> Tuple[bool, str]:
@@ -86,6 +88,8 @@ class SSHClient:
             self.port = port
             self.username = username
             self.password = password  # Store password for sudo operations
+            self.remote_home = None
+            self.remote_daemon_config = None
             
             logger.info(f"Successfully connected to {host}:{port}")
             return True, ""
@@ -158,6 +162,8 @@ class SSHClient:
         
         self.connected = False
         self.password = None  # Clear password from memory
+        self.remote_home = None
+        self.remote_daemon_config = None
         logger.info("Disconnected")
     
     def is_connected(self) -> bool:
@@ -224,6 +230,47 @@ class SSHClient:
             error = f"Command execution failed: {str(e)}"
             logger.error(error)
             return -1, "", error
+
+    def get_remote_home(self) -> str:
+        """Return the remote user's home directory and cache the result."""
+        if self.remote_home:
+            return self.remote_home
+
+        exit_code, stdout, _ = self.execute_command("echo $HOME")
+        if exit_code == 0 and stdout.strip():
+            self.remote_home = stdout.strip()
+        else:
+            self.remote_home = "/home/user"
+        return self.remote_home
+
+    def get_remote_daemon_config(self, refresh: bool = False) -> Dict[str, Any]:
+        """Load `/etc/ktv/config.json` from the remote host when available."""
+        if self.remote_daemon_config is not None and not refresh:
+            return dict(self.remote_daemon_config)
+
+        command = (
+            "python3 -c \"import json, pathlib; "
+            "path = pathlib.Path('/etc/ktv/config.json'); "
+            "print(json.dumps(json.load(path.open('r', encoding='utf-8'))) if path.exists() else '{}')\""
+        )
+        exit_code, stdout, _ = self.execute_command(command, timeout=30)
+        if exit_code == 0 and stdout.strip():
+            try:
+                self.remote_daemon_config = json.loads(stdout.strip())
+            except json.JSONDecodeError:
+                logger.warning("Could not decode remote daemon config")
+                self.remote_daemon_config = {}
+        else:
+            self.remote_daemon_config = {}
+        return dict(self.remote_daemon_config)
+
+    def get_remote_daemon_port(self, default: int = 8888, refresh: bool = False) -> int:
+        """Return the daemon API port from remote config or the default."""
+        config = self.get_remote_daemon_config(refresh=refresh)
+        try:
+            return int(config.get('api_port', default))
+        except (TypeError, ValueError):
+            return default
     
     def upload_file(self, local_path: str, remote_path: str, 
                    callback: Optional[Callable[[int, int], None]] = None) -> Tuple[bool, str]:
