@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QSize, Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QBrush, QIcon, QPainter, QPen, QPixmap, QKeySequence
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from .connection_dialog import ConnectionDialog
@@ -32,14 +33,48 @@ from ..network.commands import CommandClient
 from ..installer.check_remote import RemoteChecker
 from ..installer.deploy_package import PackageDeployer
 from ..installer.verify_install import InstallationVerifier
+from ..crash_logging import is_current_callback_source, log_qt_slot_exceptions
 
 logger = logging.getLogger(__name__)
+
+LINUX_TIME_DISCONNECTED_TEXT = "Linux time: disconnected"
+LINUX_TIME_UNAVAILABLE_TEXT = "Linux time: unavailable"
+
+
+def format_linux_time(status: dict) -> str:
+    """Format daemon-provided Linux time for the main window footer."""
+    linux_time = status.get('linux_time') if isinstance(status, dict) else None
+    if not linux_time:
+        return LINUX_TIME_UNAVAILABLE_TEXT
+
+    if isinstance(linux_time, dict):
+        display = linux_time.get('display')
+        if display:
+            return f"Linux time: {display}"
+        iso_value = linux_time.get('iso')
+        timezone_name = linux_time.get('timezone') or ''
+    else:
+        iso_value = str(linux_time)
+        timezone_name = ''
+
+    if not iso_value:
+        return LINUX_TIME_UNAVAILABLE_TEXT
+
+    try:
+        parsed_time = datetime.fromisoformat(str(iso_value).replace('Z', '+00:00'))
+    except ValueError:
+        return f"Linux time: {iso_value}"
+
+    formatted_time = parsed_time.strftime('%Y-%m-%d %H:%M:%S')
+    if timezone_name:
+        formatted_time = f"{formatted_time} {timezone_name}"
+    return f"Linux time: {formatted_time}"
 
 
 class StatusFetchThread(QThread):
     """Fetch daemon playback status away from the UI thread."""
 
-    status_ready = pyqtSignal(bool, object, str)
+    status_ready = pyqtSignal(object, bool, object, str)
 
     def __init__(self, cmd_client):
         super().__init__()
@@ -48,9 +83,10 @@ class StatusFetchThread(QThread):
     def run(self):
         try:
             success, status, error = self.cmd_client.get_status()
-            self.status_ready.emit(success, status, error)
+            self.status_ready.emit(self, success, status, error)
         except Exception as exc:
-            self.status_ready.emit(False, {}, str(exc))
+            logger.exception("Unhandled exception while fetching playback status")
+            self.status_ready.emit(self, False, {}, str(exc))
 
 
 class MainWindow(QMainWindow):
@@ -65,20 +101,74 @@ class MainWindow(QMainWindow):
         self.connection_info = {}
         self.status_thread = None
         self.status_request_pending = False
+        self._background_threads = []
+        self._closing = False
         
         self.setup_ui()
         self.setup_menu()
 
-        self.movies_tab.refresh_requested.connect(self.manual_refresh_all_views)
-        self.movies_tab.schedule_changed.connect(self.refresh_playback_status)
-        self.clips_tab.playlist_changed.connect(self.refresh_playback_status)
+        self.movies_tab.refresh_requested.connect(self._safe_slot(self.manual_refresh_all_views))
+        self.movies_tab.schedule_changed.connect(self._safe_slot(self.refresh_playback_status))
+        self.clips_tab.playlist_changed.connect(self._safe_slot(self.refresh_playback_status))
 
         self.status_timer = QTimer(self)
         self.status_timer.setInterval(5000)
-        self.status_timer.timeout.connect(self.refresh_playback_status)
-        
-        # Show connection dialog on startup
-        QTimer.singleShot(100, self.show_connection_dialog)
+        self.status_timer.timeout.connect(self._safe_slot(self.refresh_playback_status))
+
+        self.startup_timer = QTimer(self)
+        self.startup_timer.setSingleShot(True)
+        self.startup_timer.timeout.connect(self._safe_slot(self.show_connection_dialog))
+        self.startup_timer.start(100)
+
+    def _safe_slot(self, slot, context: str = None):
+        """Log uncaught Qt slot exceptions before Qt handles them."""
+        return log_qt_slot_exceptions(slot, context=context, logger=logger)
+
+    def _safe_action(self, slot, context: str = None):
+        """Wrap QAction handlers and discard QAction's checked argument."""
+        return self._safe_slot(
+            lambda _checked=False, callback=slot: callback(),
+            context=context or getattr(slot, "__name__", "action"),
+        )
+
+    def _release_background_thread(self, thread, name: str):
+        """Drop a retained worker thread after Qt reports that it stopped."""
+        if thread in self._background_threads:
+            self._background_threads.remove(thread)
+        logger.info("%s worker stopped", name)
+
+    def _retain_background_thread_until_finished(self, thread, name: str):
+        """Keep a timed-out worker alive so Qt does not destroy it mid-run."""
+        if thread not in self._background_threads:
+            self._background_threads.append(thread)
+            thread.finished.connect(
+                lambda thread=thread, name=name: self._release_background_thread(thread, name)
+            )
+
+    def _retain_status_thread_until_finished(self, thread):
+        """Keep a detached status worker alive until its finished signal arrives."""
+        if thread not in self._background_threads:
+            self._background_threads.append(thread)
+
+    def _is_current_status_thread(self, thread) -> bool:
+        """Return whether a status result belongs to the active request."""
+        return is_current_callback_source(self.status_thread, thread)
+
+    def _detach_status_thread(self):
+        """Stop tracking the active status worker without waiting on the UI thread."""
+        thread = self.status_thread
+        self.status_thread = None
+        self.status_request_pending = False
+        if thread and thread.isRunning():
+            logger.info("Detaching playback status worker")
+            thread.quit()
+            self._retain_status_thread_until_finished(thread)
+
+    def _wait_for_background_threads(self, timeout_ms: int = 3000):
+        """Give retained workers a bounded chance to finish before window teardown."""
+        for thread in list(self._background_threads):
+            if thread.isRunning() and not thread.wait(timeout_ms):
+                logger.warning("Background worker did not stop within timeout")
     
     def setup_ui(self):
         """Setup the user interface"""
@@ -161,20 +251,26 @@ class MainWindow(QMainWindow):
         self.movies_tab = MoviesTab()
         self.clips_tab = ClipsTab()
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self.movies_tab)
-        splitter.addWidget(self.clips_tab)
-        splitter.setChildrenCollapsible(False)
-        splitter.setStretchFactor(0, 6)
-        splitter.setStretchFactor(1, 5)
-        splitter.setSizes([640, 520])
-        central_layout.addWidget(splitter, 1)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setObjectName("mainContentSplitter")
+        self.main_splitter.addWidget(self.movies_tab)
+        self.main_splitter.addWidget(self.clips_tab)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setStretchFactor(0, 9)
+        self.main_splitter.setStretchFactor(1, 3)
+        self.main_splitter.setSizes([900, 300])
+        central_layout.addWidget(self.main_splitter, 1)
 
         self.setCentralWidget(central_widget)
         
         # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        self.linux_time_label = QLabel(LINUX_TIME_DISCONNECTED_TEXT)
+        self.linux_time_label.setObjectName("linuxTimeLabel")
+        self.linux_time_label.setMinimumWidth(240)
+        self.linux_time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.status_bar.addPermanentWidget(self.linux_time_label)
         self.update_status("Не подключено")
         self._reset_transport_controls()
     
@@ -187,12 +283,12 @@ class MainWindow(QMainWindow):
         
         connect_action = QAction("Подключиться...", self)
         connect_action.setShortcut(QKeySequence.StandardKey.Open)
-        connect_action.triggered.connect(self.show_connection_dialog)
+        connect_action.triggered.connect(self._safe_action(self.show_connection_dialog))
         file_menu.addAction(connect_action)
         
         disconnect_action = QAction("Отключиться", self)
         disconnect_action.setShortcut("Ctrl+D")
-        disconnect_action.triggered.connect(self.disconnect)
+        disconnect_action.triggered.connect(self._safe_action(self.disconnect))
         file_menu.addAction(disconnect_action)
         
         file_menu.addSeparator()
@@ -207,38 +303,38 @@ class MainWindow(QMainWindow):
         
         terminal_action = QAction("SSH Консоль...", self)
         terminal_action.setShortcut("Ctrl+T")
-        terminal_action.triggered.connect(self.show_terminal)
+        terminal_action.triggered.connect(self._safe_action(self.show_terminal))
         tools_menu.addAction(terminal_action)
         
         check_action = QAction("Проверить систему...", self)
-        check_action.triggered.connect(self.check_remote_system)
+        check_action.triggered.connect(self._safe_action(self.check_remote_system))
         tools_menu.addAction(check_action)
         
         install_action = QAction("Установить ПО...", self)
-        install_action.triggered.connect(self.install_software)
+        install_action.triggered.connect(self._safe_action(self.install_software))
         tools_menu.addAction(install_action)
         
         verify_action = QAction("Проверить установку...", self)
-        verify_action.triggered.connect(self.verify_installation)
+        verify_action.triggered.connect(self._safe_action(self.verify_installation))
         tools_menu.addAction(verify_action)
         
         tools_menu.addSeparator()
         
         status_action = QAction("Статус daemon...", self)
         status_action.setShortcut("F6")
-        status_action.triggered.connect(self.show_daemon_status)
+        status_action.triggered.connect(self._safe_action(self.show_daemon_status))
         tools_menu.addAction(status_action)
         
         logs_action = QAction("Логи daemon...", self)
         logs_action.setShortcut("F7")
-        logs_action.triggered.connect(self.show_daemon_logs)
+        logs_action.triggered.connect(self._safe_action(self.show_daemon_logs))
         tools_menu.addAction(logs_action)
         
         # Help menu
         help_menu = menubar.addMenu("Справка")
         
         about_action = QAction("О программе...", self)
-        about_action.triggered.connect(self.show_about)
+        about_action.triggered.connect(self._safe_action(self.show_about))
         help_menu.addAction(about_action)
     
     def show_connection_dialog(self):
@@ -327,12 +423,10 @@ class MainWindow(QMainWindow):
     
     def disconnect(self):
         """Disconnect from remote system"""
+        if self.startup_timer.isActive():
+            self.startup_timer.stop()
         self.status_timer.stop()
-        self.status_request_pending = False
-        if self.status_thread and self.status_thread.isRunning():
-            self.status_thread.quit()
-            self.status_thread.wait(1000)
-        self.status_thread = None
+        self._detach_status_thread()
         self.connected = False
         self.cmd_client = None
 
@@ -343,11 +437,20 @@ class MainWindow(QMainWindow):
             self.ssh_client.disconnect()
 
         self._reset_transport_controls()
+        self._set_linux_time_disconnected()
         self.update_status("Не подключено")
     
     def update_status(self, message: str):
         """Update status bar message"""
         self.status_bar.showMessage(message)
+
+    def _set_linux_time_disconnected(self):
+        """Show that Linux time is unavailable because the GUI is disconnected."""
+        self.linux_time_label.setText(LINUX_TIME_DISCONNECTED_TEXT)
+
+    def _set_linux_time_unavailable(self):
+        """Show that Linux time could not be fetched from the daemon."""
+        self.linux_time_label.setText(LINUX_TIME_UNAVAILABLE_TEXT)
 
     def _create_transport_button(self, icon=None, text: str = "", tooltip: str = "",
                                  checkable: bool = False, handler=None) -> QToolButton:
@@ -363,7 +466,12 @@ class MainWindow(QMainWindow):
         if text:
             button.setText(text)
         if handler:
-            button.clicked.connect(lambda _checked=False, callback=handler: callback())
+            button.clicked.connect(
+                self._safe_slot(
+                    lambda _checked=False, callback=handler: callback(),
+                    context=getattr(handler, "__name__", "transport_button"),
+                )
+            )
         return button
 
     def _build_dice_icon(self, color: str) -> QIcon:
@@ -404,6 +512,7 @@ class MainWindow(QMainWindow):
 
     def _apply_playback_status(self, status: dict):
         """Render daemon playback status into the compact banner."""
+        self.linux_time_label.setText(format_linux_time(status))
         current = status.get('current_playback', {})
         source = current.get('source')
         filename = current.get('filename')
@@ -418,15 +527,13 @@ class MainWindow(QMainWindow):
         if source == 'movie' and filename:
             self.current_playback_label.setText(f"Фильм: {filename}")
         elif source == 'clip' and filename:
-            playlist_name = playlist_status.get('active') or "плейлист"
             prefix = "Клип на паузе" if paused else "Клип"
-            self.current_playback_label.setText(f"{prefix}: {filename}  [{playlist_name}]")
+            self.current_playback_label.setText(f"{prefix}: {filename}")
         elif player_status.get('is_playing') and player_status.get('filename'):
             fallback_filename = player_status['filename']
             if playlist_status.get('playing') or paused:
-                playlist_name = playlist_status.get('active') or "плейлист"
                 prefix = "Клип на паузе" if paused else "Клип"
-                self.current_playback_label.setText(f"{prefix}: {fallback_filename}  [{playlist_name}]")
+                self.current_playback_label.setText(f"{prefix}: {fallback_filename}")
             else:
                 self.current_playback_label.setText(f"Воспроизводится: {fallback_filename}")
         else:
@@ -453,12 +560,11 @@ class MainWindow(QMainWindow):
         )
         self.play_pause_btn.setIcon(play_icon)
 
-    def _status_fetch_finished(self, success: bool, status: dict, error: str):
+    def _status_fetch_finished(self, thread, success: bool, status: dict, error: str):
         """Handle completion of a background status fetch."""
-        self.status_request_pending = False
-        if self.status_thread:
-            self.status_thread.deleteLater()
-            self.status_thread = None
+        if not self._is_current_status_thread(thread):
+            logger.info("Ignoring stale playback status response")
+            return
 
         if not self.cmd_client:
             return
@@ -468,17 +574,27 @@ class MainWindow(QMainWindow):
             self.current_playback_label.setText("Статус недоступен")
             self.next_clip_label.setText("Следующий клип: —")
             self.next_clip_label.setVisible(True)
+            self._set_linux_time_unavailable()
             self._reset_transport_controls(reset_text=False)
             return
 
         self._apply_playback_status(status)
 
+    def _status_thread_finished(self, thread):
+        """Release a status worker after Qt reports that it has stopped."""
+        if self.status_thread is thread:
+            self.status_thread = None
+            self.status_request_pending = False
+        if thread in self._background_threads:
+            self._background_threads.remove(thread)
+        thread.deleteLater()
+
     def refresh_all_views(self, do_sync: bool = False):
-        """Refresh movies, playlists and playback status together."""
+        """Refresh movies, clips and playback status together."""
         if self.movies_tab.cmd_client:
             self.movies_tab.refresh_schedules(do_sync=do_sync)
         if self.clips_tab.cmd_client:
-            self.clips_tab.refresh_playlists(do_sync=do_sync)
+            self.clips_tab.refresh_clips(do_sync=do_sync)
         self.refresh_playback_status()
 
     def manual_refresh_all_views(self):
@@ -502,7 +618,7 @@ class MainWindow(QMainWindow):
             self.refresh_playback_status()
 
     def toggle_play_pause(self):
-        """Toggle play or pause for the active clip playlist."""
+        """Toggle play or pause for clip playback."""
         self._execute_transport_command('toggle_play_pause', "Не удалось изменить состояние воспроизведения")
 
     def stop_playback(self):
@@ -519,15 +635,21 @@ class MainWindow(QMainWindow):
 
     def refresh_playback_status(self):
         """Refresh the compact playback banner in the main window."""
+        if self._closing:
+            return
         if not self.cmd_client:
             self._reset_transport_controls()
+            self._set_linux_time_disconnected()
             return
         if self.status_request_pending:
             return
 
         self.status_request_pending = True
         self.status_thread = StatusFetchThread(self.cmd_client)
-        self.status_thread.status_ready.connect(self._status_fetch_finished)
+        self.status_thread.status_ready.connect(self._safe_slot(self._status_fetch_finished))
+        self.status_thread.finished.connect(
+            lambda thread=self.status_thread: self._status_thread_finished(thread)
+        )
         self.status_thread.start()
     
     def show_terminal(self):
@@ -709,7 +831,7 @@ class MainWindow(QMainWindow):
         from PyQt6.QtCore import QThread, pyqtSignal
         
         class LogFetcher(QThread):
-            finished = pyqtSignal(str)
+            log_ready = pyqtSignal(str)
             
             def __init__(self, ssh_client):
                 super().__init__()
@@ -748,13 +870,17 @@ class MainWindow(QMainWindow):
                     logs.append(f"\n=== Daemon Files ===\n{file_list}")
                     
                     log_text = '\n'.join(logs)
-                    self.finished.emit(log_text)
+                    self.log_ready.emit(log_text)
                     
                 except Exception as e:
-                    self.finished.emit(f"Error fetching logs: {str(e)}")
+                    logger.exception("Unhandled exception while fetching daemon logs")
+                    self.log_ready.emit(f"Error fetching logs: {str(e)}")
         
         def on_logs_fetched(log_text):
             progress.close()
+            if self._closing or not self.ssh_client or not self.ssh_client.is_connected():
+                logger.info("Ignoring daemon logs fetched after disconnect or close")
+                return
             
             # Show in message box with scroll
             msg = QMessageBox(self)
@@ -765,9 +891,11 @@ class MainWindow(QMainWindow):
             msg.exec()
         
         # Create and start worker thread
-        self.log_fetcher = LogFetcher(self.ssh_client)
-        self.log_fetcher.finished.connect(on_logs_fetched)
-        self.log_fetcher.start()
+        fetcher = LogFetcher(self.ssh_client)
+        self._retain_background_thread_until_finished(fetcher, "daemon log")
+        fetcher.log_ready.connect(self._safe_slot(on_logs_fetched))
+        fetcher.finished.connect(fetcher.deleteLater)
+        fetcher.start()
     
     def show_about(self):
         """Show about dialog"""
@@ -781,6 +909,15 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event"""
-        if self.connected or self.cmd_client or self.ssh_client.is_connected():
-            self.disconnect()
+        try:
+            self._closing = True
+            if self.startup_timer.isActive():
+                self.startup_timer.stop()
+            self.status_timer.stop()
+            if self.connected or self.cmd_client or self.ssh_client.is_connected():
+                self.disconnect()
+            self._wait_for_background_threads()
+        except Exception:
+            logger.exception("Unhandled exception during main window close")
+            raise
         event.accept()

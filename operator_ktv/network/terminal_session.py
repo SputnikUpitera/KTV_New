@@ -75,7 +75,7 @@ class TerminalSession:
                 
             except Exception as e:
                 if self.running:
-                    logger.error(f"Error reading terminal output: {e}")
+                    logger.error(f"Error reading terminal output: {e}", exc_info=True)
                 break
     
     def send_input(self, text: str):
@@ -84,7 +84,7 @@ class TerminalSession:
             try:
                 self.channel.send(text.encode('utf-8'))
             except Exception as e:
-                logger.error(f"Failed to send input: {e}")
+                logger.error(f"Failed to send input: {e}", exc_info=True)
     
     def resize(self, width: int, height: int):
         """Resize the terminal"""
@@ -92,7 +92,7 @@ class TerminalSession:
             try:
                 self.channel.resize_pty(width=width, height=height)
             except Exception as e:
-                logger.error(f"Failed to resize terminal: {e}")
+                logger.error(f"Failed to resize terminal: {e}", exc_info=True)
     
     def stop(self):
         """Stop the terminal session"""

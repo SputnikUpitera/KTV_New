@@ -441,7 +441,7 @@ fi
 echo -e "${GREEN}=== Installation Complete ===${NC}"
 echo ""
 echo "Configuration file: /etc/ktv/config.json"
-echo "Media directory: ~/oktv/MM/DD/HH-MM/"
+echo "Media directory: ~/oktv/weekly/<weekday>/HH-MM/"
 echo "Clips directory: ~/oktv/clips/"
 echo "Logs: /var/log/ktv/daemon.log"
 echo ""
@@ -521,7 +521,7 @@ If automatic installation fails, you can:
 ## Files and Directories
 
 - `/opt/ktv/` - Main application directory
-- `~/oktv/MM/DD/HH-MM/` - Movies storage
+- `~/oktv/weekly/<weekday>/HH-MM/` - Movies storage, weekday 0=Monday through 6=Sunday
 - `~/oktv/clips/` - Clips/playlists storage
 - `/etc/ktv/config.json` - Configuration file
 - `/var/lib/ktv/schedule.db` - Schedule database

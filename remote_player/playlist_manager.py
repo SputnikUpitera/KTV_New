@@ -1,6 +1,6 @@
 """
-Playlist Manager for KTV daemon
-Manages continuous background playlist playback
+Clip manager for KTV daemon.
+Manages continuous background clip playback.
 """
 
 import logging
@@ -11,15 +11,15 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from ktv_paths import VIDEO_EXTENSIONS, is_supported_video_file
+from ktv_paths import VIDEO_EXTENSIONS, is_supported_video_file, validate_clip_filename
 
 logger = logging.getLogger(__name__)
 
 
 class PlaylistManager:
     """
-    Manages continuous playlist playback.
-    Plays videos from a playlist when no scheduled content is playing.
+    Manages continuous clip playback.
+    Plays videos from the default clips folder when no scheduled content is playing.
     """
 
     VIDEO_EXTENSIONS = set(VIDEO_EXTENSIONS)
@@ -38,7 +38,6 @@ class PlaylistManager:
         self.playlist_thread: Optional[threading.Thread] = None
         self.control_event = threading.Event()
 
-        self.current_playlist: Optional[dict] = None
         self.current_files: List[Path] = []
         self.current_index = -1
         self.current_playlist_file: Optional[Path] = None
@@ -82,11 +81,11 @@ class PlaylistManager:
         logger.info("PlaylistManager stopped")
 
     def pause(self):
-        """Pause playlist playback for a scheduled movie."""
+        """Pause clip playback for a scheduled movie."""
         if not self.running:
             return
 
-        logger.info("Pausing playlist playback")
+        logger.info("Pausing clip playback")
         with self.state_lock:
             self.system_paused = True
             self._update_paused_flag_locked()
@@ -97,18 +96,18 @@ class PlaylistManager:
         self.control_event.set()
 
     def resume(self):
-        """Resume playlist playback after scheduled content."""
+        """Resume clip playback after scheduled content."""
         if not self.running:
             return
 
-        logger.info("Resuming playlist playback")
+        logger.info("Resuming clip playback")
         with self.state_lock:
             self.system_paused = False
             self._update_paused_flag_locked()
         self.control_event.set()
 
     def is_playing(self) -> bool:
-        """Check if playlist is currently playing."""
+        """Check if a clip is currently playing."""
         with self.state_lock:
             return (
                 self.running
@@ -120,23 +119,17 @@ class PlaylistManager:
             )
 
     def has_active_clip(self) -> bool:
-        """Check if a clip from the playlist is currently active."""
+        """Check if a clip is currently active."""
         with self.state_lock:
             return self.current_playlist_file is not None and self.player.has_media()
 
     def reload_active_playlist(self):
-        """Reload the active playlist from the database."""
-        active_playlist = self.db.get_active_playlist()
+        """Reload the default clip list from the clips folder."""
         old_current_file = self.current_playlist_file
-        if active_playlist:
-            folder_path = Path(active_playlist['folder_path'])
-            current_files = self._scan_video_files(folder_path)
-        else:
-            current_files = self._scan_video_files(self.clips_path)
+        current_files = self._scan_video_files(self.clips_path)
 
         stop_current = False
         with self.state_lock:
-            self.current_playlist = active_playlist
             self.current_files = current_files
             self.pending_index_override = None
             self.pending_index_from_history = False
@@ -157,14 +150,16 @@ class PlaylistManager:
         if stop_current:
             self.player.stop()
 
-        if active_playlist:
-            logger.info("Loaded playlist '%s' with %s files", active_playlist['name'], len(current_files))
-        elif current_files:
-            logger.info("No active playlist, using default clips folder with %s files", len(current_files))
+        if current_files:
+            logger.info("Loaded default clips folder with %s files", len(current_files))
         else:
-            logger.warning("No active playlist and no files in clips folder")
+            logger.warning("No files in default clips folder")
 
         self.control_event.set()
+
+    def reload_clips(self):
+        """Reload the default clip list."""
+        self.reload_active_playlist()
 
     def _scan_video_files(self, directory: Path) -> List[Path]:
         """Scan a directory for video files."""
@@ -184,8 +179,8 @@ class PlaylistManager:
         return video_files
 
     def _playback_loop(self):
-        """Continuously play clips when the playlist is active."""
-        logger.info("Playlist playback loop started")
+        """Continuously play clips when clip playback is active."""
+        logger.info("Clip playback loop started")
 
         while self.running:
             try:
@@ -216,7 +211,7 @@ class PlaylistManager:
                     self.control_event.clear()
                     continue
 
-                logger.info("Playing from playlist: %s", next_video.name)
+                logger.info("Playing clip: %s", next_video.name)
                 success = self.player.play(str(next_video), fullscreen=True)
                 if not success:
                     logger.error("Failed to play: %s", next_video.name)
@@ -234,7 +229,7 @@ class PlaylistManager:
                 self.control_event.wait(1)
                 self.control_event.clear()
 
-        logger.info("Playlist playback loop ended")
+        logger.info("Clip playback loop ended")
 
     def _get_next_video(self) -> Optional[Path]:
         """Resolve the next video file to play."""
@@ -247,9 +242,8 @@ class PlaylistManager:
             return self.current_playlist_file
 
     def get_active_playlist_name(self) -> Optional[str]:
-        """Get the active playlist name."""
-        with self.state_lock:
-            return self.current_playlist['name'] if self.current_playlist else None
+        """Return no active playlist name; clips are a single default list."""
+        return None
 
     def get_current_file(self) -> Optional[str]:
         """Get the currently active clip path."""
@@ -283,7 +277,7 @@ class PlaylistManager:
         with self.state_lock:
             can_previous = self.history_cursor > 0
             return {
-                'active_playlist': self.current_playlist['name'] if self.current_playlist else None,
+                'active_playlist': None,
                 'user_paused': self.user_paused,
                 'system_paused': self.system_paused,
                 'paused': self.paused,
@@ -298,7 +292,6 @@ class PlaylistManager:
     def get_status_snapshot(self) -> dict:
         """Return a complete playlist snapshot with one lock acquisition."""
         with self.state_lock:
-            active_name = self.current_playlist['name'] if self.current_playlist else None
             current_file = str(self.current_playlist_file) if self.current_playlist_file and self.player.has_media() else None
             next_file = None
             next_filename = None
@@ -310,7 +303,7 @@ class PlaylistManager:
                     next_filename = next_path.name
 
             return {
-                'active': active_name,
+                'active': None,
                 'playing': (
                     self.running
                     and not self.system_paused
@@ -334,7 +327,7 @@ class PlaylistManager:
             }
 
     def toggle_play_pause(self) -> bool:
-        """Toggle pause or playback for playlist clips."""
+        """Toggle pause or playback for clips."""
         with self.state_lock:
             if self.system_paused or not self.current_files:
                 return False
@@ -440,9 +433,12 @@ class PlaylistManager:
         self.control_event.set()
         return True
 
-    def play_playlist_file(self, filename: str) -> bool:
+    def play_clip_file(self, filename: str) -> bool:
         """Play the requested file immediately, outside the normal queue order."""
-        target_name = Path(filename).name
+        try:
+            target_name = validate_clip_filename(filename)
+        except ValueError:
+            return False
         with self.state_lock:
             if self.system_paused or not self.current_files:
                 return False
@@ -493,7 +489,7 @@ class PlaylistManager:
         return enabled
 
     def toggle_loop(self) -> bool:
-        """Toggle playlist loop mode."""
+        """Toggle clip loop mode."""
         with self.state_lock:
             self.loop_enabled = not self.loop_enabled
             enabled = self.loop_enabled
@@ -632,10 +628,6 @@ if __name__ == '__main__':
     # Create test database in memory
     db = Database(':memory:')
     
-    # Create test playlist
-    playlist_id = db.create_playlist('Test Playlist', '/opt/ktv/media/clips')
-    db.set_active_playlist(playlist_id)
-    
     # Create player
     player = Player()
     
@@ -646,8 +638,7 @@ if __name__ == '__main__':
     pm.start()
     
     print("Playlist manager running. Press Ctrl+C to stop...")
-    print(f"Active playlist: {pm.get_active_playlist_name()}")
-    print(f"Files in playlist: {len(pm.current_files)}")
+    print(f"Files in clip list: {len(pm.current_files)}")
     
     try:
         while True:

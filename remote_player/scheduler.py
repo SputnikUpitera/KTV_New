@@ -11,6 +11,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pathlib import Path
 
+from ktv_paths import validate_time, validate_weekday
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,18 +100,17 @@ class Scheduler:
             schedule: Schedule dictionary from database
         """
         schedule_id = schedule['id']
-        month = schedule['month']
-        day = schedule['day']
+        weekday = validate_weekday(schedule['weekday'])
         hour = schedule['hour']
         minute = schedule['minute']
         filepath = schedule['filepath']
         filename = schedule['filename']
         
-        # Create cron trigger for the specific time
-        # This will trigger every year on the specified month/day/time
+        # Weekday convention is 0=Monday through 6=Sunday.
+        day_of_week = self._cron_day_of_week(weekday)
+        hour, minute = validate_time(hour, minute)
         trigger = CronTrigger(
-            month=month,
-            day=day,
+            day_of_week=day_of_week,
             hour=hour,
             minute=minute
         )
@@ -120,13 +121,18 @@ class Scheduler:
             trigger=trigger,
             args=[schedule_id, filepath, filename],
             id=f'schedule_{schedule_id}',
-            name=f'Play {filename} at {month}/{day} {hour}:{minute:02d}',
+            name=f'Play {filename} on weekday {weekday} at {hour}:{minute:02d}',
             replace_existing=True
         )
         
         self.job_ids[schedule_id] = job.id
         
-        logger.debug(f"Added schedule job: {filename} at {month}/{day} {hour}:{minute:02d}")
+        logger.debug(f"Added schedule job: {filename} on weekday {weekday} at {hour}:{minute:02d}")
+
+    @staticmethod
+    def _cron_day_of_week(weekday: int) -> int:
+        """Map app weekday 0=Monday..6=Sunday to APScheduler day_of_week."""
+        return validate_weekday(weekday)
     
     def _execute_scheduled_playback(self, schedule_id: int, filepath: str, filename: str):
         """
@@ -278,13 +284,12 @@ if __name__ == '__main__':
     # Create scheduler
     scheduler = Scheduler(db, player)
     
-    # Add a test schedule (today, in 1 minute)
+    # Add a test schedule (today's weekday, in 1 minute)
     now = datetime.now()
     next_minute = (now.minute + 1) % 60
     
     schedule_id = db.add_schedule(
-        month=now.month,
-        day=now.day,
+        weekday=now.weekday(),
         hour=now.hour,
         minute=next_minute,
         filepath='/opt/ktv/media/test.mp4',

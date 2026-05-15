@@ -22,7 +22,32 @@ from player import Player
 from scheduler import Scheduler
 from playlist_manager import PlaylistManager
 from time_controller import TimeController
-from ktv_paths import parse_movie_path, is_supported_video_file
+from ktv_paths import (
+    WEEKLY_MOVIES_DIR_NAME,
+    is_supported_video_file,
+    parse_movie_path,
+    validate_clip_filename,
+    validate_movie_filename,
+    validate_time,
+    validate_weekday,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def get_linux_time_status(now: datetime = None) -> Dict[str, Any]:
+    """Return the daemon host's local time in a stable status shape."""
+    if now:
+        current_time = now if now.tzinfo else now.astimezone()
+    else:
+        current_time = datetime.now().astimezone()
+    display_time = current_time.strftime('%Y-%m-%d %H:%M:%S %Z').strip()
+    return {
+        'iso': current_time.isoformat(timespec='seconds'),
+        'epoch': int(current_time.timestamp()),
+        'timezone': current_time.tzname() or '',
+        'display': display_time,
+    }
 
 
 class KTVDaemon:
@@ -143,21 +168,15 @@ class KTVDaemon:
         self.api_server.register_handler('update_schedule', self._handle_update_schedule)
         self.api_server.register_handler('sync_schedules', self._handle_sync_schedules)
         
-        # Playlist commands
-        self.api_server.register_handler('create_playlist', self._handle_create_playlist)
-        self.api_server.register_handler('delete_playlist', self._handle_delete_playlist)
-        self.api_server.register_handler('set_active_playlist', self._handle_set_active_playlist)
-        self.api_server.register_handler('list_playlists', self._handle_list_playlists)
-        self.api_server.register_handler('sync_playlists', self._handle_sync_playlists)
-
         # Playback transport commands
         self.api_server.register_handler('toggle_play_pause', self._handle_toggle_play_pause)
         self.api_server.register_handler('stop_playback', self._handle_stop_playback)
         self.api_server.register_handler('next_clip', self._handle_next_clip)
-        self.api_server.register_handler('play_playlist_file', self._handle_play_playlist_file)
+        self.api_server.register_handler('play_clip_file', self._handle_play_clip_file)
         self.api_server.register_handler('previous_clip', self._handle_previous_clip)
         self.api_server.register_handler('toggle_loop', self._handle_toggle_loop)
         self.api_server.register_handler('toggle_shuffle', self._handle_toggle_shuffle)
+        self.api_server.register_handler('sync_playlists', self._handle_sync_playlists)
         
         # Status commands
         self.api_server.register_handler('get_status', self._handle_get_status)
@@ -169,16 +188,16 @@ class KTVDaemon:
     
     def _handle_add_schedule(self, params: Dict) -> Dict:
         """Handle add_schedule command"""
+        weekday, hour, minute, filename = self._validate_schedule_params(params)
         target_path = self._build_schedule_target_path(
-            params['month'],
-            params['day'],
-            params['hour'],
-            params['minute'],
-            params['filename']
+            weekday,
+            hour,
+            minute,
+            filename
         )
-        source_path = Path(params['filepath'])
+        source_path = self._validate_schedule_source_path(params.get('filepath'))
         actual_path = source_path
-        actual_filename = params['filename']
+        actual_filename = filename
 
         if source_path != target_path:
             move_result = self._safe_move(source_path, target_path)
@@ -188,10 +207,9 @@ class KTVDaemon:
             actual_filename = move_result['target_path'].name
 
         schedule_id = self.db.add_schedule(
-            month=params['month'],
-            day=params['day'],
-            hour=params['hour'],
-            minute=params['minute'],
+            weekday=weekday,
+            hour=hour,
+            minute=minute,
             filepath=str(actual_path),
             filename=actual_filename,
             category=params.get('category', 'movies')
@@ -245,13 +263,20 @@ class KTVDaemon:
         if not schedule:
             raise ValueError('Schedule not found')
 
+        weekday, hour, minute, filename = self._validate_schedule_params(
+            {
+                'weekday': params.get('weekday'),
+                'hour': params.get('hour'),
+                'minute': params.get('minute'),
+                'filename': schedule['filename'],
+            }
+        )
         source_path = Path(schedule['filepath'])
         target_path = self._build_schedule_target_path(
-            params['month'],
-            params['day'],
-            params['hour'],
-            params['minute'],
-            schedule['filename']
+            weekday,
+            hour,
+            minute,
+            filename
         )
 
         move_result = self._safe_move(source_path, target_path)
@@ -260,56 +285,19 @@ class KTVDaemon:
 
         success = self.db.update_schedule(
             schedule_id=params['schedule_id'],
-            month=params['month'],
-            day=params['day'],
-            hour=params['hour'],
-            minute=params['minute'],
+            weekday=weekday,
+            hour=hour,
+            minute=minute,
             filepath=str(move_result['target_path']),
             filename=move_result['target_path'].name
         )
         self._reload_runtime_state()
         return {'success': success, 'filepath': str(move_result['target_path'])}
     
-    def _handle_create_playlist(self, params: Dict) -> Dict:
-        """Handle create_playlist command"""
-        folder_path = self._build_playlist_directory(params['name'])
-        folder_path.mkdir(parents=True, exist_ok=True)
-        playlist_id = self.db.create_playlist(
-            name=params['name'],
-            folder_path=str(folder_path)
-        )
-        if not self.db.get_active_playlist():
-            self.db.set_active_playlist(playlist_id)
-        self._reload_playlist_state()
-        return {'playlist_id': playlist_id}
-    
-    def _handle_delete_playlist(self, params: Dict) -> Dict:
-        """Handle delete_playlist command"""
-        success = self.db.delete_playlist(params['playlist_id'])
-        self._reload_playlist_state()
-        return {'success': success}
-    
-    def _handle_set_active_playlist(self, params: Dict) -> Dict:
-        """Handle set_active_playlist command"""
-        success = self.db.set_active_playlist(params['playlist_id'])
-        self._reload_playlist_state()
-        return {'success': success}
-    
-    def _handle_list_playlists(self, params: Dict) -> Dict:
-        """Handle list_playlists command"""
-        playlists = self.db.list_playlists()
-        return {'playlists': playlists}
-
     def _handle_sync_schedules(self, params: Dict) -> Dict:
         """Handle schedule/database synchronization."""
         result = self.sync_schedules()
         self._reload_runtime_state()
-        return result
-
-    def _handle_sync_playlists(self, params: Dict) -> Dict:
-        """Handle playlist/database synchronization."""
-        result = self.sync_playlists()
-        self._reload_playlist_state()
         return result
 
     def _handle_toggle_play_pause(self, params: Dict) -> Dict:
@@ -336,16 +324,24 @@ class KTVDaemon:
             raise RuntimeError('Could not start the next clip')
         return self._transport_response()
 
-    def _handle_play_playlist_file(self, params: Dict) -> Dict:
-        """Handle immediate playback of a specific playlist file."""
+    def _handle_play_clip_file(self, params: Dict) -> Dict:
+        """Handle immediate playback of a specific clip file."""
         playlist_manager = self._require_clip_transport()
         filename = params.get('filename')
         if not filename:
             raise ValueError('filename is required')
-        success = playlist_manager.play_playlist_file(filename)
+        filename = validate_clip_filename(filename)
+        playlist_manager.reload_clips()
+        success = playlist_manager.play_clip_file(filename)
         if not success:
             raise RuntimeError('Could not start the requested clip')
         return self._transport_response()
+
+    def _handle_sync_playlists(self, params: Dict) -> Dict:
+        """Handle clip list synchronization after GUI uploads or deletes files."""
+        result = self.sync_playlists()
+        self._reload_playlist_state()
+        return result
 
     def _handle_previous_clip(self, params: Dict) -> Dict:
         """Handle going back to the previous clip."""
@@ -375,6 +371,7 @@ class KTVDaemon:
             'daemon_running': True,
             'player': player_status,
             'api_server_port': self.config['api_port'],
+            'linux_time': get_linux_time_status(),
             'broadcast_hours': {
                 'start': self.config['broadcast_start'],
                 'end': self.config['broadcast_end']
@@ -448,8 +445,6 @@ class KTVDaemon:
         self._register_api_handlers()
 
         self.sync_schedules()
-        self.sync_playlists()
-        
         # Start API server
         self.api_server.start()
         
@@ -508,7 +503,7 @@ class KTVDaemon:
     def _reload_playlist_state(self):
         """Reload playlist state after playlist changes."""
         if self.playlist_manager:
-            self.playlist_manager.reload_active_playlist()
+            self.playlist_manager.reload_clips()
 
     def _require_playlist_manager(self) -> PlaylistManager:
         """Ensure playlist manager is available."""
@@ -529,22 +524,59 @@ class KTVDaemon:
             'playlist': status.get('playlist', {}),
             'current_playback': status.get('current_playback', {}),
             'next_clip': status.get('next_clip', {}),
+            'linux_time': status.get('linux_time'),
         }
 
-    def _build_schedule_target_path(self, month: int, day: int, hour: int, minute: int,
+    def _validate_schedule_params(self, params: Dict) -> tuple:
+        """Validate weekly schedule parameters from an API request."""
+        try:
+            weekday = validate_weekday(self._coerce_int_param(params, 'weekday'))
+            hour, minute = validate_time(
+                self._coerce_int_param(params, 'hour'),
+                self._coerce_int_param(params, 'minute')
+            )
+        except KeyError as exc:
+            raise ValueError(f"{exc.args[0]} is required") from exc
+        except (TypeError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+        filename = validate_movie_filename(params.get('filename'))
+        return weekday, hour, minute, filename
+
+    def _coerce_int_param(self, params: Dict, key: str) -> int:
+        value = params[key]
+        if isinstance(value, bool):
+            raise ValueError(f"{key} must be an integer")
+        return int(value)
+
+    def _validate_schedule_source_path(self, filepath: str) -> Path:
+        """Validate a source path accepted by schedule add/update handlers."""
+        if not filepath:
+            raise ValueError('filepath is required')
+        raw_path = str(filepath)
+        if "\x00" in raw_path:
+            raise ValueError('filepath contains unsafe characters')
+        source_path = Path(raw_path)
+        if not source_path.is_absolute():
+            raise ValueError('filepath must be absolute')
+        if '..' in source_path.parts:
+            raise ValueError('filepath must not contain parent directory references')
+        if not is_supported_video_file(source_path):
+            raise ValueError('filepath must point to a supported video file')
+        return source_path
+
+    def _build_schedule_target_path(self, weekday: int, hour: int, minute: int,
                                     filename: str) -> Path:
-        """Build the canonical target path for a scheduled movie."""
+        """Build the canonical target path for a weekly scheduled movie."""
+        weekday = validate_weekday(weekday)
+        hour, minute = validate_time(hour, minute)
+        filename = validate_movie_filename(filename)
         return (
             self.media_base_path
-            / f"{month:02d}"
-            / f"{day:02d}"
+            / WEEKLY_MOVIES_DIR_NAME
+            / f"{weekday}"
             / f"{hour:02d}-{minute:02d}"
-            / Path(filename).name
+            / filename
         )
-
-    def _build_playlist_directory(self, playlist_name: str) -> Path:
-        """Build the canonical directory for a playlist."""
-        return self.clips_root / playlist_name.strip()
 
     def _build_conflict_path(self, target_path: Path) -> Path:
         """Build a conflict-safe target path."""
@@ -598,23 +630,30 @@ class KTVDaemon:
         return bool(self.config.get('aggressive_normalization', False))
 
     def _iter_movie_files(self) -> List[Path]:
-        """Collect movie files from canonical `MM/DD/HH-MM/` schedule directories."""
+        """Collect movie files from canonical `weekly/<weekday>/HH-MM/` directories."""
         movie_files: List[Path] = []
-        for month_dir in sorted(self.media_base_path.iterdir(), key=lambda item: item.name):
-            if month_dir == self.clips_root or not month_dir.is_dir() or not month_dir.name.isdigit():
+        weekly_root = self.media_base_path / WEEKLY_MOVIES_DIR_NAME
+        if not weekly_root.exists():
+            return movie_files
+
+        for weekday_dir in sorted(weekly_root.iterdir(), key=lambda item: item.name):
+            if not weekday_dir.is_dir():
                 continue
-            for day_dir in sorted(month_dir.iterdir(), key=lambda item: item.name):
-                if not day_dir.is_dir() or not day_dir.name.isdigit():
+            try:
+                validate_weekday(int(weekday_dir.name))
+            except ValueError:
+                continue
+            for slot_dir in sorted(weekday_dir.iterdir(), key=lambda item: item.name):
+                if not slot_dir.is_dir() or '-' not in slot_dir.name:
                     continue
-                for slot_dir in sorted(day_dir.iterdir(), key=lambda item: item.name):
-                    if not slot_dir.is_dir() or '-' not in slot_dir.name:
-                        continue
-                    hour_part, minute_part = slot_dir.name.split('-', 1)
-                    if not (hour_part.isdigit() and minute_part.isdigit()):
-                        continue
-                    for file_path in sorted(slot_dir.iterdir(), key=lambda item: item.name):
-                        if self._is_video_file(file_path):
-                            movie_files.append(file_path)
+                hour_part, minute_part = slot_dir.name.split('-', 1)
+                try:
+                    validate_time(int(hour_part), int(minute_part))
+                except ValueError:
+                    continue
+                for file_path in sorted(slot_dir.iterdir(), key=lambda item: item.name):
+                    if self._is_video_file(file_path):
+                        movie_files.append(file_path)
         movie_files.sort(key=lambda item: str(item))
         return movie_files
 
@@ -632,8 +671,7 @@ class KTVDaemon:
 
         for schedule in schedules:
             expected_path = self._build_schedule_target_path(
-                schedule['month'],
-                schedule['day'],
+                schedule['weekday'],
                 schedule['hour'],
                 schedule['minute'],
                 schedule['filename']
@@ -658,8 +696,7 @@ class KTVDaemon:
                         moved += 1
                         self.db.update_schedule(
                             schedule_id=schedule['id'],
-                            month=schedule['month'],
-                            day=schedule['day'],
+                            weekday=schedule['weekday'],
                             hour=schedule['hour'],
                             minute=schedule['minute'],
                             filepath=str(actual_path),
@@ -677,8 +714,7 @@ class KTVDaemon:
                 actual_filename = expected_path.name
                 self.db.update_schedule(
                     schedule_id=schedule['id'],
-                    month=schedule['month'],
-                    day=schedule['day'],
+                    weekday=schedule['weekday'],
                     hour=schedule['hour'],
                     minute=schedule['minute'],
                     filepath=str(actual_path),
@@ -698,10 +734,9 @@ class KTVDaemon:
             if not parsed:
                 continue
 
-            month, day, hour, minute, filename = parsed
+            weekday, hour, minute, filename = parsed
             schedule_id = self.db.add_schedule(
-                month=month,
-                day=day,
+                weekday=weekday,
                 hour=hour,
                 minute=minute,
                 filepath=file_key,
@@ -718,107 +753,15 @@ class KTVDaemon:
             'ensured_dirs': ensured_dirs,
         }
 
-    def _migrate_default_clips(self) -> int:
-        """Move loose clip files into a visible default playlist."""
-        default_name = 'Основной'
-        default_dir = self._build_playlist_directory(default_name)
-        default_dir.mkdir(parents=True, exist_ok=True)
-
-        moved_files = 0
-        for entry in self.clips_root.iterdir():
-            if not self._is_video_file(entry):
-                continue
-            target_path = default_dir / entry.name
-            if entry != target_path:
-                move_result = self._safe_move(entry, target_path)
-                if move_result['success']:
-                    moved_files += 1
-                else:
-                    logger.error("Fixed: could not move default clip %s: %s", entry, move_result['error'])
-
-        if moved_files:
-            try:
-                self.db.ensure_playlist(default_name, str(default_dir), folder_aligned=True)
-            except ValueError as exc:
-                logger.error("Fixed: %s", exc)
-
-        return moved_files
-
     def sync_playlists(self) -> Dict:
-        """Synchronize playlist rows with canonical clip directories."""
+        """Keep the default clips folder present without touching playlist rows."""
         self.clips_root.mkdir(parents=True, exist_ok=True)
-
-        created = 0
-        updated = 0
-        imported = 0
-        moved_root_files = self._migrate_default_clips()
-
-        playlists = self.db.list_playlists()
-        known_names = {playlist['name'] for playlist in playlists}
-        aggressive = self._is_aggressive_normalization_enabled()
-
-        for playlist in playlists:
-            current_dir = Path(playlist['folder_path'])
-            expected_dir = self._build_playlist_directory(playlist['name'])
-
-            if current_dir == expected_dir:
-                expected_dir.mkdir(parents=True, exist_ok=True)
-                continue
-
-            if current_dir.exists():
-                if aggressive and not expected_dir.exists():
-                    try:
-                        shutil.move(str(current_dir), str(expected_dir))
-                        self.db.ensure_playlist(
-                            playlist['name'],
-                            str(expected_dir),
-                            folder_aligned=True
-                        )
-                        updated += 1
-                    except Exception as exc:
-                        logger.error("Fixed: could not move playlist '%s': %s", playlist['name'], exc)
-                else:
-                    logger.warning(
-                        "Fixed: leaving playlist path unchanged for '%s' (non-destructive sync)",
-                        playlist['name']
-                    )
-                continue
-
-            if expected_dir.exists():
-                self.db.ensure_playlist(
-                    playlist['name'],
-                    str(expected_dir),
-                    folder_aligned=True
-                )
-                updated += 1
-                continue
-
-            logger.warning("Fixed: playlist directories missing for '%s', leaving DB unchanged", playlist['name'])
-
-        for entry in sorted(self.clips_root.iterdir(), key=lambda item: item.name.lower()):
-            if not entry.is_dir():
-                continue
-
-            try:
-                _, was_created = self.db.ensure_playlist(entry.name, str(entry))
-                if was_created:
-                    created += 1
-                    known_names.add(entry.name)
-                elif entry.name not in known_names:
-                    imported += 1
-            except ValueError as exc:
-                logger.error("Fixed: %s", exc)
-
-        refreshed_playlists = self.db.list_playlists()
-        if refreshed_playlists and not self.db.get_active_playlist():
-            self.db.set_active_playlist(refreshed_playlists[0]['id'])
-
         return {
             'success': True,
-            'created': created,
-            'updated': updated,
-            'imported': imported,
-            'moved_root_files': moved_root_files,
+            'created': 0,
+            'updated': 0,
+            'imported': 0,
+            'moved_root_files': 0,
         }
     
     def run(self):

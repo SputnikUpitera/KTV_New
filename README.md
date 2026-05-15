@@ -45,9 +45,19 @@ python build_offline_package.py --arch x86_64
 
 ### 3) Запустить клиент
 
+Normal Windows launch without a console window:
+
 ```bash
-python operator_ktv/main.py
+pythonw OperatorKTV.pyw
 ```
+
+Debug launch with console output still visible:
+
+```bash
+python operator_ktv/main.py --debug
+```
+
+GUI logs are written to `%USERPROFILE%\.operatorktv\operator_ktv.log`.
 
 ### 4) Подготовить Linux
 
@@ -72,7 +82,7 @@ sudo systemctl start ssh
 - перетащить видеофайл;
 - подтвердить добавление.
 
-Файл попадет в `~/oktv/MM/DD/HH-MM/` на Linux.
+Файл попадет в `~/oktv/weekly/<weekday>/HH-MM/` на Linux, где `weekday` — 0=Monday ... 6=Sunday.
 
 ### Плейлисты (клипы)
 - открыть вкладку `Клипы`;
@@ -97,7 +107,7 @@ sudo systemctl start ssh
 - `/etc/ktv/config.json` — конфиг
 - `/var/lib/ktv/schedule.db` — база расписания
 - `/var/log/ktv/daemon.log` — лог daemon
-- `~/oktv/MM/DD/HH-MM/` — файлы расписания
+- `~/oktv/weekly/<weekday>/HH-MM/` — файлы расписания, `weekday` 0=Monday ... 6=Sunday
 - `~/oktv/clips/` — файлы плейлистов
 
 ### Команды эксплуатации

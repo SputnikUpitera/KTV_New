@@ -140,12 +140,11 @@ except Exception as e:
     
     # Convenience methods for specific commands
     
-    def add_schedule(self, month: int, day: int, hour: int, minute: int,
+    def add_schedule(self, weekday: int, hour: int, minute: int,
                     filepath: str, filename: str, category: str = 'movies') -> Tuple[bool, int, str]:
-        """Add a schedule entry"""
+        """Add a weekly schedule entry. Weekday uses 0=Monday through 6=Sunday."""
         params = {
-            'month': month,
-            'day': day,
+            'weekday': weekday,
             'hour': hour,
             'minute': minute,
             'filepath': filepath,
@@ -182,12 +181,11 @@ except Exception as e:
         schedules = result.get('schedules', []) if result else []
         return success, schedules, error
 
-    def update_schedule(self, schedule_id: int, month: int, day: int, hour: int, minute: int) -> Tuple[bool, Dict, str]:
+    def update_schedule(self, schedule_id: int, weekday: int, hour: int, minute: int) -> Tuple[bool, Dict, str]:
         """Update the time and canonical file path for a schedule."""
         params = {
             'schedule_id': schedule_id,
-            'month': month,
-            'day': day,
+            'weekday': weekday,
             'hour': hour,
             'minute': minute,
         }
@@ -198,34 +196,9 @@ except Exception as e:
         """Synchronize movie schedule rows with filesystem directories."""
         success, result, error = self.send_command('sync_schedules')
         return success, result or {}, error
-    
-    def create_playlist(self, name: str) -> Tuple[bool, int, str]:
-        """Create a new playlist"""
-        params = {
-            'name': name,
-        }
-        success, result, error = self.send_command('create_playlist', params)
-        playlist_id = result.get('playlist_id', 0) if result else 0
-        return success, playlist_id, error
-    
-    def delete_playlist(self, playlist_id: int) -> Tuple[bool, str]:
-        """Delete a playlist"""
-        success, result, error = self.send_command('delete_playlist', {'playlist_id': playlist_id})
-        return success, error
-    
-    def set_active_playlist(self, playlist_id: int) -> Tuple[bool, str]:
-        """Set active playlist"""
-        success, result, error = self.send_command('set_active_playlist', {'playlist_id': playlist_id})
-        return success, error
-    
-    def list_playlists(self) -> Tuple[bool, list, str]:
-        """List all playlists"""
-        success, result, error = self.send_command('list_playlists')
-        playlists = result.get('playlists', []) if result else []
-        return success, playlists, error
 
     def sync_playlists(self) -> Tuple[bool, Dict, str]:
-        """Synchronize playlist rows with playlist directories."""
+        """Synchronize the daemon's in-memory default clip list."""
         success, result, error = self.send_command('sync_playlists')
         return success, result or {}, error
     
@@ -249,9 +222,9 @@ except Exception as e:
         success, result, error = self.send_command('next_clip')
         return success, result or {}, error
 
-    def play_playlist_file(self, filename: str) -> Tuple[bool, Dict, str]:
-        """Play a specific file from the selected playlist immediately."""
-        success, result, error = self.send_command('play_playlist_file', {'filename': filename})
+    def play_clip_file(self, filename: str) -> Tuple[bool, Dict, str]:
+        """Play a specific file from the default clip list immediately."""
+        success, result, error = self.send_command('play_clip_file', {'filename': filename})
         return success, result or {}, error
 
     def previous_clip(self) -> Tuple[bool, Dict, str]:

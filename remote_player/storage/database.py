@@ -10,6 +10,8 @@ from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 import logging
 
+from ktv_paths import validate_movie_filename, validate_time, validate_weekday
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,21 +33,7 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Schedule table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS schedule (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    month INTEGER NOT NULL CHECK(month >= 1 AND month <= 12),
-                    day INTEGER NOT NULL CHECK(day >= 1 AND day <= 31),
-                    hour INTEGER NOT NULL CHECK(hour >= 0 AND hour <= 23),
-                    minute INTEGER NOT NULL CHECK(minute >= 0 AND minute <= 59),
-                    filepath TEXT NOT NULL,
-                    filename TEXT NOT NULL,
-                    enabled INTEGER DEFAULT 1,
-                    category TEXT DEFAULT 'movies',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
+            self._ensure_schedule_schema(cursor)
             
             # Playlists table
             cursor.execute('''
@@ -68,8 +56,8 @@ class Database:
             
             # Create indexes
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_schedule_time 
-                ON schedule(month, day, hour, minute)
+                CREATE INDEX IF NOT EXISTS idx_schedule_time
+                ON schedule(weekday, hour, minute)
             ''')
             
             cursor.execute('''
@@ -79,6 +67,37 @@ class Database:
             
             conn.commit()
             logger.info("Database initialized")
+
+    def _ensure_schedule_schema(self, cursor):
+        """Create weekly schedule schema, dropping old annual rows if needed."""
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule'"
+        )
+        table_exists = cursor.fetchone() is not None
+        if table_exists:
+            columns = {
+                row["name"]
+                for row in cursor.execute("PRAGMA table_info(schedule)").fetchall()
+            }
+            if "weekday" not in columns or {"month", "day"} & columns:
+                cursor.execute("DROP TABLE schedule")
+                table_exists = False
+
+        if not table_exists:
+            # Weekday convention is 0=Monday through 6=Sunday.
+            cursor.execute('''
+                CREATE TABLE schedule (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    weekday INTEGER NOT NULL CHECK(weekday >= 0 AND weekday <= 6),
+                    hour INTEGER NOT NULL CHECK(hour >= 0 AND hour <= 23),
+                    minute INTEGER NOT NULL CHECK(minute >= 0 AND minute <= 59),
+                    filepath TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    enabled INTEGER DEFAULT 1,
+                    category TEXT DEFAULT 'movies',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
     
     def get_connection(self) -> sqlite3.Connection:
         """Get database connection"""
@@ -88,18 +107,21 @@ class Database:
     
     # Schedule operations
     
-    def add_schedule(self, month: int, day: int, hour: int, minute: int,
+    def add_schedule(self, weekday: int, hour: int, minute: int,
                     filepath: str, filename: str, category: str = 'movies') -> int:
-        """Add a new schedule entry"""
+        """Add a new weekly schedule entry."""
+        weekday = validate_weekday(weekday)
+        hour, minute = validate_time(hour, minute)
+        filename = validate_movie_filename(filename)
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO schedule (month, day, hour, minute, filepath, filename, category)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (month, day, hour, minute, filepath, filename, category))
+                INSERT INTO schedule (weekday, hour, minute, filepath, filename, category)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (weekday, hour, minute, filepath, filename, category))
             conn.commit()
             schedule_id = cursor.lastrowid
-            logger.info(f"Added schedule: {filename} at {month}/{day} {hour}:{minute}")
+            logger.info(f"Added schedule: {filename} at weekday {weekday} {hour}:{minute}")
             return schedule_id
     
     def remove_schedule(self, schedule_id: int) -> bool:
@@ -134,24 +156,26 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def update_schedule(self, schedule_id: int, month: int, day: int, hour: int, minute: int,
+    def update_schedule(self, schedule_id: int, weekday: int, hour: int, minute: int,
                         filepath: str, filename: str) -> bool:
-        """Update a schedule entry and its file location."""
+        """Update a weekly schedule entry and its file location."""
+        weekday = validate_weekday(weekday)
+        hour, minute = validate_time(hour, minute)
+        filename = validate_movie_filename(filename)
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 UPDATE schedule
-                SET month = ?, day = ?, hour = ?, minute = ?, filepath = ?, filename = ?
+                SET weekday = ?, hour = ?, minute = ?, filepath = ?, filename = ?
                 WHERE id = ?
-            ''', (month, day, hour, minute, filepath, filename, schedule_id))
+            ''', (weekday, hour, minute, filepath, filename, schedule_id))
             conn.commit()
             updated = cursor.rowcount > 0
             if updated:
                 logger.info(
-                    "Updated schedule ID %s to %02d/%02d %02d:%02d",
+                    "Updated schedule ID %s to weekday %d %02d:%02d",
                     schedule_id,
-                    month,
-                    day,
+                    weekday,
                     hour,
                     minute
                 )
@@ -172,20 +196,22 @@ class Database:
                 query += ' AND category = ?'
                 params.append(category)
             
-            query += ' ORDER BY month, day, hour, minute'
+            query += ' ORDER BY weekday, hour, minute'
             
             cursor.execute(query, params)
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
     
-    def get_schedules_for_time(self, month: int, day: int, hour: int, minute: int) -> List[Dict]:
-        """Get schedules for specific time"""
+    def get_schedules_for_time(self, weekday: int, hour: int, minute: int) -> List[Dict]:
+        """Get enabled schedules for a weekly weekday/time slot."""
+        weekday = validate_weekday(weekday)
+        hour, minute = validate_time(hour, minute)
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT * FROM schedule 
-                WHERE month = ? AND day = ? AND hour = ? AND minute = ? AND enabled = 1
-            ''', (month, day, hour, minute))
+                SELECT * FROM schedule
+                WHERE weekday = ? AND hour = ? AND minute = ? AND enabled = 1
+            ''', (weekday, hour, minute))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
     

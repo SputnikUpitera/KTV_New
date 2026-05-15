@@ -14,14 +14,12 @@ from PyQt6.QtCore import Qt
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from operator_ktv.gui.main_window import MainWindow
+from operator_ktv.crash_logging import ensure_operator_log_dir, install_exception_hooks
 
 
 def setup_logging(debug=False):
     """Configure logging"""
-    log_dir = Path.home() / '.operatorktv'
-    log_dir.mkdir(exist_ok=True)
-    
-    log_file = log_dir / 'operator_ktv.log'
+    log_file = ensure_operator_log_dir()
     
     # Set log level based on debug flag
     log_level = logging.DEBUG if debug else logging.INFO
@@ -29,10 +27,7 @@ def setup_logging(debug=False):
     logging.basicConfig(
         level=log_level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
+        handlers=_build_logging_handlers(log_file)
     )
     
     # Enable paramiko logging for SSH debugging
@@ -44,6 +39,14 @@ def setup_logging(debug=False):
     logger = logging.getLogger(__name__)
     logger.info(f"Logging initialized (level: {'DEBUG' if debug else 'INFO'})")
     logger.info(f"Log file: {log_file}")
+
+
+def _build_logging_handlers(log_file):
+    """Build handlers that work under both python.exe and pythonw.exe."""
+    handlers = [logging.FileHandler(log_file, encoding='utf-8')]
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler())
+    return handlers
 
 
 def setup_dark_theme(app):
@@ -101,6 +104,17 @@ def setup_dark_theme(app):
             border-radius: 8px;
             padding: 4px;
         }
+        QFrame#scheduleDayColumn {
+            border: 1px solid #3a3a3a;
+            border-radius: 6px;
+            background-color: #282828;
+        }
+        QListWidget#scheduleDayList {
+            border: 0px;
+            border-radius: 0px;
+            padding: 2px;
+            background-color: transparent;
+        }
         QTreeWidget::item:hover {
             background-color: #404040;
         }
@@ -132,7 +146,7 @@ def setup_dark_theme(app):
         QPushButton:pressed {
             background-color: #2d2d2d;
         }
-        QToolButton#transportButton, QToolButton#monthAddButton {
+        QToolButton#transportButton, QToolButton#weekdayAddButton {
             min-width: 28px;
             min-height: 28px;
             padding: 2px;
@@ -142,14 +156,14 @@ def setup_dark_theme(app):
             color: #f0f0f0;
             font-weight: 400;
         }
-        QToolButton#transportButton:hover, QToolButton#monthAddButton:hover {
+        QToolButton#transportButton:hover, QToolButton#weekdayAddButton:hover {
             background-color: #3a4048;
         }
         QToolButton#transportButton:checked {
             background-color: #2a82da;
             color: #000000;
         }
-        QToolButton#monthAddButton {
+        QToolButton#weekdayAddButton {
             min-width: 24px;
             min-height: 24px;
             padding: 2px;
@@ -160,7 +174,7 @@ def setup_dark_theme(app):
             font-size: 13px;
             font-weight: 400;
         }
-        QToolButton#monthAddButton:hover {
+        QToolButton#weekdayAddButton:hover {
             background-color: #353535;
             color: #ffffff;
         }
@@ -176,7 +190,7 @@ def setup_dark_theme(app):
             min-height: 26px;
             max-height: 26px;
         }
-        QLabel#monthHeaderLabel {
+        QLabel#weekdayHeaderLabel {
             font-size: 11px;
             font-weight: 400;
         }
@@ -211,27 +225,32 @@ def main():
     # Setup logging
     setup_logging(debug=args.debug)
     logger = logging.getLogger(__name__)
+    install_exception_hooks()
     logger.info("Starting OperatorKTV...")
     
     if args.debug:
         logger.info("Debug mode enabled")
     
-    # Create application
-    app = QApplication(sys.argv)
-    app.setApplicationName("OperatorKTV")
-    app.setOrganizationName("OperatorKTV")
-    
-    # Setup dark theme
-    setup_dark_theme(app)
-    
-    # Create and show main window
-    window = MainWindow()
-    window.show()
-    
-    logger.info("Application started")
-    
-    # Run application
-    sys.exit(app.exec())
+    try:
+        # Create application
+        app = QApplication(sys.argv)
+        app.setApplicationName("OperatorKTV")
+        app.setOrganizationName("OperatorKTV")
+
+        # Setup dark theme
+        setup_dark_theme(app)
+
+        # Create and show main window
+        window = MainWindow()
+        window.show()
+
+        logger.info("Application started")
+
+        # Run application
+        sys.exit(app.exec())
+    except Exception:
+        logger.exception("Fatal error in OperatorKTV GUI")
+        raise
 
 
 if __name__ == '__main__':
